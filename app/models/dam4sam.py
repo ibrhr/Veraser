@@ -92,16 +92,11 @@ class D4smVideoMaskingModel:
         performance: list[OperationSpeedMetric] = []
         tracker_started_at = perf_counter()
         logger.info("Initializing D4SM tracker session_id=%s", session_id)
-        with self._d4sm_working_directory():
-            tracker = self._tracker_class(
-                model_size=self.settings.d4sm_model_size,
-                checkpoint_dir=str(self.settings.d4sm_checkpoint_dir),
-                offload_state_to_cpu=self.settings.d4sm_offload_state_to_cpu,
-            )
+        tracker = self._create_tracker()
         init_image = Image.open(frame_paths[0]).convert("RGB")
         init_regions = self._objects_to_init_regions(objects)
         logger.info("Initializing D4SM objects session_id=%s init_region_count=%s", session_id, len(init_regions))
-        tracker.initialize(init_image, init_regions)
+        self._initialize_tracker(tracker=tracker, image=init_image, init_regions=init_regions)
         performance.append(
             build_speed_metric(
                 name="d4sm_initialize",
@@ -113,11 +108,12 @@ class D4smVideoMaskingModel:
 
         initial_mask_started_at = perf_counter()
         logger.info("Writing initial D4SM masks session_id=%s frame_index=0", session_id)
+        initial_masks = self._initial_masks_from_tracker(tracker=tracker, image_size=init_image.size)
         manifest_frames = [
-            self._write_initial_frame_masks(
-                init_regions=init_regions,
+            self._write_frame_masks(
+                masks=initial_masks,
                 objects=objects,
-                image_size=init_image.size,
+                frame_index=0,
                 combined_dir=combined_dir,
                 per_object_dir=per_object_dir,
             )
@@ -139,7 +135,7 @@ class D4smVideoMaskingModel:
                 frame_path,
             )
             image = Image.open(frame_path).convert("RGB")
-            outputs = tracker.track(image)
+            outputs = self._track_frame(tracker=tracker, image=image, frame_index=frame_index)
             masks = outputs["masks"]
             frame_artifacts = self._write_frame_masks(
                 masks=masks,
@@ -214,13 +210,8 @@ class D4smVideoMaskingModel:
         )
         image = Image.open(first_frame_path).convert("RGB")
         init_regions = self._objects_to_init_regions([object_prompt])
-        with self._d4sm_working_directory():
-            tracker = self._tracker_class(
-                model_size=self.settings.d4sm_model_size,
-                checkpoint_dir=str(self.settings.d4sm_checkpoint_dir),
-                offload_state_to_cpu=self.settings.d4sm_offload_state_to_cpu,
-            )
-        tracker.initialize(image, init_regions)
+        tracker = self._create_tracker()
+        self._initialize_tracker(tracker=tracker, image=image, init_regions=init_regions)
         masks = self._initial_masks_from_tracker(tracker=tracker, image_size=image.size)
         if not masks:
             raise ModelRuntimeError("D4SM did not return a first-frame preview mask.")
@@ -325,6 +316,55 @@ class D4smVideoMaskingModel:
             "combined_mask": str(combined_path),
             "object_masks": object_paths,
         }
+
+    def _create_tracker(self) -> Any:
+        if self._tracker_class is None:
+            raise ModelRuntimeError("D4SM tracker class is not loaded.")
+        try:
+            with self._d4sm_working_directory():
+                return self._tracker_class(
+                    model_size=self.settings.d4sm_model_size,
+                    checkpoint_dir=str(self.settings.d4sm_checkpoint_dir),
+                    offload_state_to_cpu=self.settings.d4sm_offload_state_to_cpu,
+                )
+        except ModuleNotFoundError as exc:
+            raise ModelRuntimeError(
+                f"D4SM dependency is missing: {exc.name}. "
+                "Run `uv sync --group gpu` after pulling the latest code."
+            ) from exc
+        except Exception as exc:
+            missing_module = self._missing_module_name(exc)
+            if missing_module:
+                raise ModelRuntimeError(
+                    f"D4SM dependency is missing: {missing_module}. "
+                    "Run `uv sync --group gpu` after pulling the latest code."
+                ) from exc
+            raise ModelRuntimeError(f"Could not initialize D4SM tracker: {exc}") from exc
+
+    def _initialize_tracker(self, *, tracker: Any, image: Image.Image, init_regions: list[dict[str, Any]]) -> None:
+        try:
+            tracker.initialize(image, init_regions)
+        except Exception as exc:
+            raise ModelRuntimeError(f"Could not initialize D4SM objects on the first frame: {exc}") from exc
+
+    def _track_frame(self, *, tracker: Any, image: Image.Image, frame_index: int) -> dict[str, Any]:
+        try:
+            return tracker.track(image)
+        except Exception as exc:
+            raise ModelRuntimeError(f"Could not run D4SM tracking on frame {frame_index}: {exc}") from exc
+
+    def _missing_module_name(self, exc: BaseException) -> str | None:
+        seen: set[int] = set()
+        stack: list[BaseException | None] = [exc]
+        while stack:
+            current = stack.pop()
+            if current is None or id(current) in seen:
+                continue
+            seen.add(id(current))
+            if isinstance(current, ModuleNotFoundError):
+                return current.name
+            stack.extend([current.__cause__, current.__context__])
+        return None
 
     def _initial_masks_from_tracker(self, *, tracker: Any, image_size: tuple[int, int]) -> list[Any]:
         import numpy as np
