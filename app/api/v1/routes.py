@@ -215,7 +215,7 @@ async def get_masking_job(
 ) -> MaskingJobResponse:
     try:
         return service.get_job(session_id, job_id)
-    except MaskingJobNotFoundError as exc:
+    except (SessionNotFoundError, MaskingJobNotFoundError) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
@@ -231,7 +231,7 @@ async def get_mask_manifest(
 ) -> MaskArtifactManifest:
     try:
         job = job_service.get_job(session_id, job_id)
-    except MaskingJobNotFoundError as exc:
+    except (SessionNotFoundError, MaskingJobNotFoundError) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
     if job.status != "succeeded":
@@ -239,7 +239,10 @@ async def get_mask_manifest(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Masking job is {job.status}; manifest is not ready.",
         )
-    manifest = artifact_service.read_manifest(session_id, job_id)
+    try:
+        manifest = artifact_service.read_manifest(session_id, job_id)
+    except SessionNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return MaskArtifactManifest(
         session_id=session_id,
         job_id=job_id,
@@ -260,7 +263,7 @@ async def get_combined_mask(
 ) -> FileResponse:
     try:
         job = job_service.get_job(session_id, job_id)
-    except MaskingJobNotFoundError as exc:
+    except (SessionNotFoundError, MaskingJobNotFoundError) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     if job.status != "succeeded":
         raise HTTPException(
@@ -268,7 +271,10 @@ async def get_combined_mask(
             detail=f"Masking job is {job.status}; masks are not ready.",
         )
 
-    mask_path = artifact_service.combined_mask_path(session_id, job_id, frame_index)
+    try:
+        mask_path = artifact_service.combined_mask_path(session_id, job_id, frame_index)
+    except SessionNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     if not mask_path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mask frame was not found.")
     return FileResponse(
@@ -288,7 +294,7 @@ async def get_processed_video(
 ) -> FileResponse:
     try:
         job = job_service.get_job(session_id, job_id)
-    except MaskingJobNotFoundError as exc:
+    except (SessionNotFoundError, MaskingJobNotFoundError) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     if job.status != "succeeded":
         raise HTTPException(
@@ -296,7 +302,10 @@ async def get_processed_video(
             detail=f"Masking job is {job.status}; processed video is not ready.",
         )
 
-    video_path = artifact_service.processed_video_path(session_id, job_id)
+    try:
+        video_path = artifact_service.processed_video_path(session_id, job_id)
+    except SessionNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     if not video_path.exists():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -338,7 +347,7 @@ async def get_inpainting_job(
 ) -> InpaintingJobResponse:
     try:
         return service.get_job(session_id=session_id, masking_job_id=job_id)
-    except InpaintingJobNotFoundError as exc:
+    except (SessionNotFoundError, InpaintingJobNotFoundError) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
