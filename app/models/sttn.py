@@ -34,26 +34,28 @@ class SttnVideoInpaintingModel:
         if self._loaded:
             logger.debug("STTN model already loaded")
             return
+        repo_path = self.settings.sttn_repo_path.resolve()
+        checkpoint_path = self.settings.sttn_checkpoint_path.resolve()
         logger.info(
             "Loading STTN model repo_path=%s checkpoint_path=%s device=%s",
-            self.settings.sttn_repo_path,
-            self.settings.sttn_checkpoint_path,
+            repo_path,
+            checkpoint_path,
             self.settings.sttn_device,
         )
-        if not self.settings.sttn_repo_path.exists():
+        if not repo_path.exists():
             raise ModelRuntimeError(
-                f"STTN repo path does not exist: {self.settings.sttn_repo_path}. "
+                f"STTN repo path does not exist: {repo_path}. "
                 "Run `python3 scripts/setup_sttn.py` first."
             )
-        if not self.settings.sttn_checkpoint_path.exists():
+        if not checkpoint_path.exists():
             raise ModelRuntimeError(
-                f"STTN checkpoint does not exist: {self.settings.sttn_checkpoint_path}. "
+                f"STTN checkpoint does not exist: {checkpoint_path}. "
                 "Run `python3 scripts/setup_sttn.py` first."
             )
 
-        repo_path = str(self.settings.sttn_repo_path)
-        if repo_path not in sys.path:
-            sys.path.insert(0, repo_path)
+        repo_path_string = str(repo_path)
+        if repo_path_string not in sys.path:
+            sys.path.insert(0, repo_path_string)
 
         try:
             import torch
@@ -64,17 +66,17 @@ class SttnVideoInpaintingModel:
                 "Could not import STTN runtime dependencies. Install `uv sync --group gpu` first."
             ) from exc
 
-        with self._sttn_working_directory():
+        with self._sttn_working_directory(repo_path):
             try:
                 logger.info("Importing STTN model module")
                 module = importlib.import_module("model.sttn")
                 model = module.InpaintGenerator().to(self.settings.sttn_device)
-                logger.info("Loading STTN checkpoint checkpoint_path=%s", self.settings.sttn_checkpoint_path)
-                data = torch.load(self.settings.sttn_checkpoint_path, map_location=self.settings.sttn_device)
+                logger.info("Loading STTN checkpoint checkpoint_path=%s", checkpoint_path)
+                data = torch.load(checkpoint_path, map_location=self.settings.sttn_device)
                 model.load_state_dict(data["netG"])
                 model.eval()
             except Exception as exc:
-                raise ModelRuntimeError("Could not load STTN model or checkpoint.") from exc
+                raise ModelRuntimeError(f"Could not load STTN model or checkpoint from {checkpoint_path}.") from exc
 
         self._torch = torch
         self._transforms = transforms
@@ -293,9 +295,9 @@ class SttnVideoInpaintingModel:
             logger.info("Released STTN video writer output_video_path=%s output_size=%s", output_video_path, output_size)
 
     @contextmanager
-    def _sttn_working_directory(self):
+    def _sttn_working_directory(self, repo_path: Path):
         previous_cwd = Path.cwd()
-        os.chdir(self.settings.sttn_repo_path)
+        os.chdir(repo_path)
         try:
             yield
         finally:

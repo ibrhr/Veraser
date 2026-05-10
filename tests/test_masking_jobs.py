@@ -1,12 +1,13 @@
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 import sys
 
 from PIL import Image
 
 from app.models.base import VideoInpaintingResult, VideoMaskingResult
 from app.models.dam4sam import D4smVideoMaskingModel
+from app.models.sttn import SttnVideoInpaintingModel
 from app.schemas.masking import InpaintingJobResponse, MaskingJobResponse
 from app.schemas.prompts import SubmitObjectPromptsRequest
 from app.services.json_store import write_json
@@ -132,6 +133,17 @@ class RecordingInferenceTracker:
     def track(self, image: Image.Image) -> dict[str, list[object]]:
         self.calls.append(f"track:{image.size}")
         return {"masks": []}
+
+
+class RecordingSttnGenerator:
+    def to(self, device: str) -> "RecordingSttnGenerator":
+        return self
+
+    def load_state_dict(self, state: dict[str, object]) -> None:
+        return None
+
+    def eval(self) -> None:
+        return None
 
 
 def make_session(tmp_path: Path) -> tuple[str, VideoSessionService]:
@@ -336,6 +348,61 @@ def test_d4sm_tracker_uses_absolute_checkpoint_dir_inside_repo_cwd(tmp_path: Pat
             "cwd": repo_dir.resolve(),
         }
     ]
+
+
+def test_sttn_load_uses_absolute_checkpoint_path_inside_repo_cwd(tmp_path: Path, monkeypatch) -> None:
+    repo_dir = tmp_path / "var" / "models" / "sttn"
+    checkpoint_path = repo_dir / "checkpoints" / "sttn.pth"
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_bytes(b"fake")
+    monkeypatch.chdir(tmp_path)
+
+    load_calls: list[dict[str, object]] = []
+
+    def fake_torch_load(path: Path, *, map_location: str) -> dict[str, dict[str, object]]:
+        load_calls.append(
+            {
+                "path": path,
+                "map_location": map_location,
+                "cwd": Path.cwd(),
+            }
+        )
+        return {"netG": {}}
+
+    fake_torch = SimpleNamespace(load=fake_torch_load)
+    fake_torchvision = ModuleType("torchvision")
+    fake_torchvision.transforms = SimpleNamespace()
+    fake_core = ModuleType("core")
+    fake_core_utils = ModuleType("core.utils")
+    fake_core_utils.Stack = object
+    fake_core_utils.ToTorchFormatTensor = object
+    fake_model = ModuleType("model")
+    fake_sttn_module = ModuleType("model.sttn")
+    fake_sttn_module.InpaintGenerator = RecordingSttnGenerator
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "torchvision", fake_torchvision)
+    monkeypatch.setitem(sys.modules, "core", fake_core)
+    monkeypatch.setitem(sys.modules, "core.utils", fake_core_utils)
+    monkeypatch.setitem(sys.modules, "model", fake_model)
+    monkeypatch.setitem(sys.modules, "model.sttn", fake_sttn_module)
+
+    model = SttnVideoInpaintingModel(
+        Settings(
+            sttn_repo_path=Path("var/models/sttn"),
+            sttn_checkpoint_path=Path("var/models/sttn/checkpoints/sttn.pth"),
+        )
+    )
+
+    model.load()
+
+    assert load_calls == [
+        {
+            "path": checkpoint_path.resolve(),
+            "map_location": "cuda:0",
+            "cwd": repo_dir.resolve(),
+        }
+    ]
+    assert Path.cwd() == tmp_path
 
 
 def test_d4sm_tracking_runs_under_torch_inference_mode(tmp_path: Path, monkeypatch) -> None:
