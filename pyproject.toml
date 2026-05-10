@@ -1,0 +1,23 @@
+[project]
+name = "veraser"
+version = "0.1.0"
+description = "FastAPI service for video object removal workflows."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115.0",
+    "imageio[ffmpeg]>=2.37.0",
+    "pillow>=11.0.0",
+    "pydantic-settings>=2.7.0",
+    "python-multipart>=0.0.20",
+    "uvicorn[standard]>=0.34.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.0",
+    "pytest>=8.3.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
