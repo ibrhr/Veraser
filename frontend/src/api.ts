@@ -15,7 +15,9 @@ export function apiUrl(path: string): string {
   if (path.startsWith("http")) {
     return path;
   }
-  return `${API_ROOT}${path}`;
+  const root = API_ROOT.endsWith("/") ? API_ROOT.slice(0, -1) : API_ROOT;
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `${root}${normalizedPath}`;
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {

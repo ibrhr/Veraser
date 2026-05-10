@@ -128,6 +128,7 @@ class MaskPromptService:
         if len(remaining_objects) == len(objects):
             raise ObjectPromptNotFoundError(f"Object prompt {object_id} was not found.")
         self._write_objects(self.session_service.get_prompts_path(session_id), remaining_objects)
+        self.artifact_service.object_preview_mask_path(session_id, object_id).unlink(missing_ok=True)
         logger.info(
             "Deleted object prompt session_id=%s object_id=%s remaining_object_count=%s",
             session_id,
@@ -136,6 +137,7 @@ class MaskPromptService:
         )
 
     def get_preview_mask_path(self, *, session_id: str, object_id: str) -> Path:
+        self.session_service.get_metadata(session_id)
         objects = self._read_objects(session_id)
         object_prompt = next((item for item in objects if item.object_id == object_id), None)
         if object_prompt is None:

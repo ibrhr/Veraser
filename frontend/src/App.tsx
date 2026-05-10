@@ -49,23 +49,42 @@ type DraftBox = {
   y2: number;
 };
 
-function useHtmlImage(src: string | null) {
-  const [image, setImage] = useState<HTMLImageElement | null>(null);
+type ImageLoadState = {
+  image: HTMLImageElement | null;
+  error: string | null;
+};
+
+function useHtmlImage(src: string | null, label: string): ImageLoadState {
+  const [state, setState] = useState<ImageLoadState>({ image: null, error: null });
 
   useEffect(() => {
     if (!src) {
-      setImage(null);
+      setState({ image: null, error: null });
       return;
     }
-    const nextImage = new Image();
-    nextImage.onload = () => setImage(nextImage);
+    let cancelled = false;
+    const nextImage = new window.Image();
+    nextImage.crossOrigin = "anonymous";
+    setState({ image: null, error: null });
+    nextImage.onload = () => {
+      if (!cancelled) {
+        setState({ image: nextImage, error: null });
+      }
+    };
+    nextImage.onerror = () => {
+      if (!cancelled) {
+        setState({ image: null, error: `Unable to load ${label}.` });
+      }
+    };
     nextImage.src = src;
     return () => {
+      cancelled = true;
       nextImage.onload = null;
+      nextImage.onerror = null;
     };
-  }, [src]);
+  }, [label, src]);
 
-  return image;
+  return state;
 }
 
 function clamp(value: number, max: number) {
@@ -159,9 +178,12 @@ export default function App() {
       ? apiUrl(`/api/v1/video-sessions/${session.session_id}/masking-jobs/${job.job_id}/masks/combined/${maskFrameIndex}`)
       : null;
 
-  const firstFrameImage = useHtmlImage(firstFrameUrl);
-  const previewImage = useHtmlImage(previewUrl ? `${previewUrl}?t=${previewNonce}` : null);
-  const trackedMaskImage = useHtmlImage(trackedMaskUrl);
+  const firstFrameImageState = useHtmlImage(firstFrameUrl, "first frame");
+  const previewImageState = useHtmlImage(previewUrl ? `${previewUrl}?t=${previewNonce}` : null, "preview mask");
+  const trackedMaskImageState = useHtmlImage(trackedMaskUrl, "tracked mask");
+  const firstFrameImage = firstFrameImageState.image;
+  const previewImage = previewImageState.image;
+  const trackedMaskImage = trackedMaskImageState.image;
 
   const frameSize = useMemo(() => {
     if (!session) {
@@ -193,6 +215,13 @@ export default function App() {
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    const imageError = firstFrameImageState.error ?? previewImageState.error ?? trackedMaskImageState.error;
+    if (imageError) {
+      setError(imageError);
+    }
+  }, [firstFrameImageState.error, previewImageState.error, trackedMaskImageState.error]);
 
   useEffect(() => {
     if (!session || !job || job.status === "succeeded" || job.status === "failed") {
@@ -273,11 +302,14 @@ export default function App() {
       if (selectedObjectId) {
         const response = await updateObject(session.session_id, selectedObjectId, draftPrompts);
         setPreviewObjectId(response.object.object_id);
+        setDraftPrompts(response.object.prompts);
         setPreviewNonce((current) => current + 1);
       } else {
         const response = await createObject(session.session_id, draftPrompts);
-        setSelectedObjectId(response.objects[0]?.object_id ?? null);
-        setPreviewObjectId(response.objects[0]?.object_id ?? null);
+        const createdObject = response.objects[response.objects.length - 1] ?? null;
+        setSelectedObjectId(createdObject?.object_id ?? null);
+        setPreviewObjectId(createdObject?.object_id ?? null);
+        setDraftPrompts(createdObject?.prompts ?? []);
         setPreviewNonce((current) => current + 1);
       }
       await refreshObjects(session.session_id);
@@ -371,7 +403,12 @@ export default function App() {
       return;
     }
     if (tool === "point") {
-      const prompt: PointPrompt = { type: "point", x: point.x, y: point.y, label: pointLabel };
+      const prompt: PointPrompt = {
+        type: "point",
+        x: clamp(point.x, frameSize.width - 1),
+        y: clamp(point.y, frameSize.height - 1),
+        label: pointLabel
+      };
       setDraftPrompts((current) => [...current, prompt]);
       return;
     }
@@ -534,6 +571,8 @@ export default function App() {
                     className="secondary-button small"
                     title="Preview first-frame mask"
                     onClick={() => {
+                      setSelectedObjectId(object.object_id);
+                      setDraftPrompts(object.prompts);
                       setPreviewObjectId(object.object_id);
                       setPreviewNonce((current) => current + 1);
                     }}
@@ -581,15 +620,15 @@ export default function App() {
             >
               <Layer scaleX={scale} scaleY={scale}>
                 {firstFrameImage ? (
-                  <KonvaImage image={firstFrameImage} width={frameSize.width} height={frameSize.height} />
+                  <KonvaImage image={firstFrameImage} width={frameSize.width} height={frameSize.height} listening={false} />
                 ) : (
-                  <Rect width={frameSize.width} height={frameSize.height} fill="#20252b" />
+                  <Rect width={frameSize.width} height={frameSize.height} fill="#20252b" listening={false} />
                 )}
                 {trackedMaskImage ? (
-                  <KonvaImage image={trackedMaskImage} width={frameSize.width} height={frameSize.height} opacity={0.45} />
+                  <KonvaImage image={trackedMaskImage} width={frameSize.width} height={frameSize.height} opacity={0.45} listening={false} />
                 ) : null}
                 {previewImage ? (
-                  <KonvaImage image={previewImage} width={frameSize.width} height={frameSize.height} opacity={0.85} />
+                  <KonvaImage image={previewImage} width={frameSize.width} height={frameSize.height} opacity={0.85} listening={false} />
                 ) : null}
                 <Group>
                   {visiblePrompts.map((prompt, index) =>

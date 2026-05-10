@@ -80,6 +80,7 @@ async def get_first_frame(
         Path(first_frame_path),
         media_type="image/png",
         filename=f"{session_id}-first-frame.png",
+        content_disposition_type="inline",
     )
 
 
@@ -162,7 +163,13 @@ async def get_object_preview_mask(
         preview_path = service.get_preview_mask_path(session_id=session_id, object_id=object_id)
     except (SessionNotFoundError, ObjectPromptNotFoundError) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    return FileResponse(preview_path, media_type="image/png", filename=f"{object_id}-preview-mask.png")
+    return FileResponse(
+        preview_path,
+        media_type="image/png",
+        filename=f"{object_id}-preview-mask.png",
+        content_disposition_type="inline",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.post(
@@ -253,7 +260,12 @@ async def get_combined_mask(
     mask_path = artifact_service.combined_mask_path(session_id, job_id, frame_index)
     if not mask_path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mask frame was not found.")
-    return FileResponse(mask_path, media_type="image/png", filename=mask_path.name)
+    return FileResponse(
+        mask_path,
+        media_type="image/png",
+        filename=mask_path.name,
+        content_disposition_type="inline",
+    )
 
 
 @router.get("/video-sessions/{session_id}/masking-jobs/{job_id}/processed-video")

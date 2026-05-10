@@ -29,6 +29,7 @@ class Settings(BaseSettings):
             "http://127.0.0.1:5173",
         ]
     )
+    cors_allow_origin_regex: str | None = r"https?://.*\.thundercompute\.net"
 
     d4sm_repo_path: Path = Path("var/models/d4sm")
     d4sm_checkpoint_dir: Path = Path("var/models/d4sm/checkpoints")

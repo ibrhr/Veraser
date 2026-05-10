@@ -1,6 +1,8 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
+from PIL import Image
+
 from app.models.base import VideoInpaintingResult, VideoMaskingResult
 from app.schemas.masking import InpaintingJobResponse, MaskingJobResponse
 from app.schemas.prompts import SubmitObjectPromptsRequest
@@ -190,6 +192,9 @@ def test_object_prompt_preview_update_and_delete(tmp_path: Path) -> None:
 
     preview_path = prompt_service.get_preview_mask_path(session_id=session_id, object_id=object_id)
     assert preview_path.exists()
+    with Image.open(preview_path) as preview:
+        assert preview.mode == "RGBA"
+        assert preview.getpixel((2, 2))[3] > 0
 
     updated = prompt_service.update_object(
         session_id=session_id,
@@ -202,3 +207,4 @@ def test_object_prompt_preview_update_and_delete(tmp_path: Path) -> None:
 
     prompt_service.delete_object(session_id=session_id, object_id=object_id)
     assert prompt_service.list_objects(session_id).objects == []
+    assert not preview_path.exists()
