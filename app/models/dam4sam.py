@@ -1,5 +1,7 @@
 from pathlib import Path
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
+from collections.abc import Iterable, Iterator
+import gc
 import logging
 import os
 import sys
@@ -31,10 +33,11 @@ class D4smVideoMaskingModel:
             logger.debug("D4SM model already loaded")
             return
         logger.info(
-            "Loading D4SM model repo_path=%s checkpoint_dir=%s model_size=%s",
+            "Loading D4SM model repo_path=%s checkpoint_dir=%s model_size=%s offload_state_to_cpu=%s",
             self.settings.d4sm_repo_path,
             self.settings.d4sm_checkpoint_dir,
             self.settings.d4sm_model_size,
+            self.settings.d4sm_offload_state_to_cpu,
         )
         if not self.settings.d4sm_repo_path.exists():
             raise ModelRuntimeError(
@@ -47,6 +50,7 @@ class D4smVideoMaskingModel:
                 "Run `python3 scripts/setup_d4sm.py --model-size large` first."
             )
 
+        self._configure_pytorch_allocator()
         repo_path = str(self.settings.d4sm_repo_path.resolve())
         if repo_path not in sys.path:
             sys.path.insert(0, repo_path)
@@ -82,6 +86,60 @@ class D4smVideoMaskingModel:
             len(frame_paths),
             len(objects),
         )
+        return self._generate_masks_from_frame_stream(
+            session_id=session_id,
+            frames=self._iter_image_paths(frame_paths),
+            output_dir=output_dir,
+            objects=objects,
+            frames_total_hint=len(frame_paths),
+            source="extracted_frames",
+        )
+
+    def generate_masks_from_video(
+        self,
+        *,
+        session_id: str,
+        video_path: Path,
+        output_dir: Path,
+        objects: list[StoredObjectPrompt],
+    ) -> VideoMaskingResult:
+        self.load()
+        if self._tracker_class is None:
+            raise ModelRuntimeError("D4SM tracker class is not loaded.")
+        logger.info(
+            "Starting D4SM mask generation from video session_id=%s video_path=%s output_dir=%s object_count=%s",
+            session_id,
+            video_path,
+            output_dir,
+            len(objects),
+        )
+        return self._generate_masks_from_frame_stream(
+            session_id=session_id,
+            frames=self._iter_video_frames(video_path),
+            output_dir=output_dir,
+            objects=objects,
+            frames_total_hint=None,
+            source="video",
+        )
+
+    def _generate_masks_from_frame_stream(
+        self,
+        *,
+        session_id: str,
+        frames: Iterable[tuple[int, Image.Image]],
+        output_dir: Path,
+        objects: list[StoredObjectPrompt],
+        frames_total_hint: int | None,
+        source: str,
+    ) -> VideoMaskingResult:
+        frame_iterator = iter(frames)
+        try:
+            first_frame_index, init_image = next(frame_iterator)
+        except StopIteration as exc:
+            raise ModelRuntimeError("No video frames were found for D4SM masking.") from exc
+        if first_frame_index != 0:
+            init_image.close()
+            raise ModelRuntimeError(f"D4SM expected the first frame index to be 0; got {first_frame_index}.")
 
         output_dir.mkdir(parents=True, exist_ok=True)
         combined_dir = output_dir / "combined"
@@ -90,104 +148,118 @@ class D4smVideoMaskingModel:
         per_object_dir.mkdir(parents=True, exist_ok=True)
 
         performance: list[OperationSpeedMetric] = []
-        tracker_started_at = perf_counter()
-        logger.info("Initializing D4SM tracker session_id=%s", session_id)
-        tracker = self._create_tracker()
-        init_image = Image.open(frame_paths[0]).convert("RGB")
-        init_regions = self._objects_to_init_regions(objects)
-        logger.info("Initializing D4SM objects session_id=%s init_region_count=%s", session_id, len(init_regions))
-        self._initialize_tracker(tracker=tracker, image=init_image, init_regions=init_regions)
-        performance.append(
-            build_speed_metric(
-                name="d4sm_initialize",
-                label="DAM4SAM initialize",
-                elapsed_seconds=perf_counter() - tracker_started_at,
-                frames_processed=1,
+        tracker = None
+        try:
+            tracker_started_at = perf_counter()
+            logger.info("Initializing D4SM tracker session_id=%s", session_id)
+            tracker = self._create_tracker()
+            if frames_total_hint is not None and hasattr(tracker, "n_frames"):
+                tracker.n_frames = frames_total_hint
+            init_regions = self._objects_to_init_regions(objects)
+            logger.info("Initializing D4SM objects session_id=%s init_region_count=%s", session_id, len(init_regions))
+            self._initialize_tracker(tracker=tracker, image=init_image, init_regions=init_regions)
+            performance.append(
+                build_speed_metric(
+                    name="d4sm_initialize",
+                    label="DAM4SAM initialize",
+                    elapsed_seconds=perf_counter() - tracker_started_at,
+                    frames_processed=1,
+                )
             )
-        )
 
-        initial_mask_started_at = perf_counter()
-        logger.info("Writing initial D4SM masks session_id=%s frame_index=0", session_id)
-        initial_masks = self._initial_masks_from_tracker(tracker=tracker, image_size=init_image.size)
-        manifest_frames = [
-            self._write_frame_masks(
-                masks=initial_masks,
-                objects=objects,
-                frame_index=0,
-                combined_dir=combined_dir,
-                per_object_dir=per_object_dir,
+            initial_mask_started_at = perf_counter()
+            logger.info("Writing initial D4SM masks session_id=%s frame_index=0", session_id)
+            initial_masks = self._initial_masks_from_tracker(tracker=tracker, image_size=init_image.size)
+            manifest_frames = [
+                self._write_frame_masks(
+                    masks=initial_masks,
+                    objects=objects,
+                    frame_index=0,
+                    combined_dir=combined_dir,
+                    per_object_dir=per_object_dir,
+                )
+            ]
+            performance.append(
+                build_speed_metric(
+                    name="initial_mask_write",
+                    label="Initial mask write",
+                    elapsed_seconds=perf_counter() - initial_mask_started_at,
+                    frames_processed=1,
+                )
             )
-        ]
-        performance.append(
-            build_speed_metric(
-                name="initial_mask_write",
-                label="Initial mask write",
-                elapsed_seconds=perf_counter() - initial_mask_started_at,
-                frames_processed=1,
-            )
-        )
-        tracking_started_at = perf_counter()
-        for frame_index, frame_path in enumerate(frame_paths[1:], start=1):
-            logger.debug(
-                "Tracking D4SM frame session_id=%s frame_index=%s frame_path=%s",
+            tracking_started_at = perf_counter()
+            frames_done = 1
+            for frame_index, image in frame_iterator:
+                logger.debug(
+                    "Tracking D4SM frame session_id=%s frame_index=%s source=%s",
+                    session_id,
+                    frame_index,
+                    source,
+                )
+                try:
+                    outputs = self._track_frame(tracker=tracker, image=image, frame_index=frame_index)
+                    masks = outputs["masks"]
+                    frame_artifacts = self._write_frame_masks(
+                        masks=masks,
+                        objects=objects,
+                        frame_index=frame_index,
+                        combined_dir=combined_dir,
+                        per_object_dir=per_object_dir,
+                    )
+                    manifest_frames.append(frame_artifacts)
+                finally:
+                    image.close()
+                if self._should_clear_cuda_cache(frame_index):
+                    self._release_cuda_memory()
+                logger.debug("Wrote D4SM frame masks session_id=%s frame_index=%s", session_id, frame_index)
+                frames_done += 1
+            logger.info(
+                "D4SM tracking complete session_id=%s tracked_frames=%s",
                 session_id,
-                frame_index,
-                frame_path,
+                max(frames_done - 1, 0),
             )
-            image = Image.open(frame_path).convert("RGB")
-            outputs = self._track_frame(tracker=tracker, image=image, frame_index=frame_index)
-            masks = outputs["masks"]
-            frame_artifacts = self._write_frame_masks(
-                masks=masks,
-                objects=objects,
-                frame_index=frame_index,
-                combined_dir=combined_dir,
-                per_object_dir=per_object_dir,
+            performance.append(
+                build_speed_metric(
+                    name="d4sm_tracking",
+                    label="DAM4SAM tracking",
+                    elapsed_seconds=perf_counter() - tracking_started_at,
+                    frames_processed=max(frames_done - 1, 0),
+                )
             )
-            manifest_frames.append(frame_artifacts)
-            logger.debug("Wrote D4SM frame masks session_id=%s frame_index=%s", session_id, frame_index)
-        logger.info(
-            "D4SM tracking complete session_id=%s tracked_frames=%s",
-            session_id,
-            max(len(frame_paths) - 1, 0),
-        )
-        performance.append(
-            build_speed_metric(
-                name="d4sm_tracking",
-                label="DAM4SAM tracking",
-                elapsed_seconds=perf_counter() - tracking_started_at,
-                frames_processed=max(len(frame_paths) - 1, 0),
-            )
-        )
 
-        manifest_path = output_dir / "manifest.json"
-        manifest_started_at = perf_counter()
-        logger.info("Writing D4SM mask manifest session_id=%s manifest_path=%s", session_id, manifest_path)
-        write_json(
-            manifest_path,
-            {
-                "session_id": session_id,
-                "model": "d4sm",
-                "model_size": self.settings.d4sm_model_size,
-                "frames_total": len(frame_paths),
-                "objects": [item.object_id for item in objects],
-                "processed_video": None,
-                "frames": manifest_frames,
-            },
-        )
-        performance.append(
-            build_speed_metric(
-                name="mask_manifest_write",
-                label="Mask manifest write",
-                elapsed_seconds=perf_counter() - manifest_started_at,
+            manifest_path = output_dir / "manifest.json"
+            manifest_started_at = perf_counter()
+            logger.info("Writing D4SM mask manifest session_id=%s manifest_path=%s", session_id, manifest_path)
+            write_json(
+                manifest_path,
+                {
+                    "session_id": session_id,
+                    "model": "d4sm",
+                    "model_size": self.settings.d4sm_model_size,
+                    "frames_total": frames_done,
+                    "objects": [item.object_id for item in objects],
+                    "processed_video": None,
+                    "frames": manifest_frames,
+                },
             )
-        )
-        return VideoMaskingResult(
-            frames_total=len(frame_paths),
-            frames_done=len(frame_paths),
-            manifest_path=manifest_path,
-            performance=performance,
-        )
+            performance.append(
+                build_speed_metric(
+                    name="mask_manifest_write",
+                    label="Mask manifest write",
+                    elapsed_seconds=perf_counter() - manifest_started_at,
+                )
+            )
+            return VideoMaskingResult(
+                frames_total=frames_done,
+                frames_done=frames_done,
+                manifest_path=manifest_path,
+                performance=performance,
+            )
+        finally:
+            if init_image is not None:
+                init_image.close()
+            tracker = None
+            self._release_cuda_memory()
 
     def write_object_preview_mask(
         self,
@@ -208,16 +280,25 @@ class D4smVideoMaskingModel:
             first_frame_path,
             output_path,
         )
-        image = Image.open(first_frame_path).convert("RGB")
-        init_regions = self._objects_to_init_regions([object_prompt])
-        tracker = self._create_tracker()
-        self._initialize_tracker(tracker=tracker, image=image, init_regions=init_regions)
-        masks = self._initial_masks_from_tracker(tracker=tracker, image_size=image.size)
-        if not masks:
-            raise ModelRuntimeError("D4SM did not return a first-frame preview mask.")
+        tracker = None
+        image = None
+        try:
+            with Image.open(first_frame_path) as image_file:
+                image = image_file.convert("RGB")
+            init_regions = self._objects_to_init_regions([object_prompt])
+            tracker = self._create_tracker()
+            self._initialize_tracker(tracker=tracker, image=image, init_regions=init_regions)
+            masks = self._initial_masks_from_tracker(tracker=tracker, image_size=image.size)
+            if not masks:
+                raise ModelRuntimeError("D4SM did not return a first-frame preview mask.")
 
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        self._write_preview_overlay(mask=masks[0], output_path=output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            self._write_preview_overlay(mask=masks[0], output_path=output_path)
+        finally:
+            if image is not None:
+                image.close()
+            tracker = None
+            self._release_cuda_memory()
         logger.info(
             "Generated D4SM first-frame preview mask session_id=%s object_id=%s output_path=%s",
             session_id,
@@ -225,6 +306,18 @@ class D4smVideoMaskingModel:
             output_path,
         )
         return output_path
+
+    def _iter_image_paths(self, frame_paths: list[Path]) -> Iterator[tuple[int, Image.Image]]:
+        for frame_index, frame_path in enumerate(frame_paths):
+            with Image.open(frame_path) as image_file:
+                image = image_file.convert("RGB")
+            yield frame_index, image
+
+    def _iter_video_frames(self, video_path: Path) -> Iterator[tuple[int, Image.Image]]:
+        import imageio.v3 as iio
+
+        for frame_index, frame in enumerate(iio.imiter(str(video_path))):
+            yield frame_index, Image.fromarray(frame).convert("RGB")
 
     def _objects_to_init_regions(self, objects: list[StoredObjectPrompt]) -> list[dict[str, Any]]:
         init_regions = []
@@ -350,15 +443,97 @@ class D4smVideoMaskingModel:
 
     def _initialize_tracker(self, *, tracker: Any, image: Image.Image, init_regions: list[dict[str, Any]]) -> None:
         try:
-            tracker.initialize(image, init_regions)
+            with self._torch_inference_context():
+                tracker.initialize(image, init_regions)
         except Exception as exc:
             raise ModelRuntimeError(f"Could not initialize D4SM objects on the first frame: {exc}") from exc
 
     def _track_frame(self, *, tracker: Any, image: Image.Image, frame_index: int) -> dict[str, Any]:
         try:
-            return tracker.track(image)
+            with self._torch_inference_context():
+                return tracker.track(image)
         except Exception as exc:
+            if self._is_cuda_out_of_memory(exc):
+                self._release_cuda_memory()
             raise ModelRuntimeError(f"Could not run D4SM tracking on frame {frame_index}: {exc}") from exc
+
+    def _configure_pytorch_allocator(self) -> None:
+        if self.settings.pytorch_cuda_alloc_conf:
+            os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", self.settings.pytorch_cuda_alloc_conf)
+
+    @contextmanager
+    def _torch_inference_context(self):
+        try:
+            import torch
+        except Exception:
+            yield
+            return
+
+        context_factory = getattr(torch, "inference_mode", None) or getattr(torch, "no_grad", None)
+        if context_factory is None:
+            yield
+            return
+
+        with context_factory(), self._torch_autocast_context(torch):
+            yield
+
+    def _torch_autocast_context(self, torch: Any):
+        if not self.settings.d4sm_device.startswith("cuda"):
+            return nullcontext()
+        cuda = getattr(torch, "cuda", None)
+        is_available = getattr(cuda, "is_available", None)
+        if callable(is_available):
+            try:
+                if not is_available():
+                    return nullcontext()
+            except Exception:
+                return nullcontext()
+        cuda_amp = getattr(cuda, "amp", None)
+        cuda_autocast = getattr(cuda_amp, "autocast", None)
+        if callable(cuda_autocast):
+            return cuda_autocast()
+        autocast = getattr(torch, "autocast", None)
+        if callable(autocast):
+            return autocast(device_type="cuda")
+        return nullcontext()
+
+    def _should_clear_cuda_cache(self, frame_index: int) -> bool:
+        interval = self.settings.d4sm_clear_cuda_cache_interval
+        return interval > 0 and frame_index > 0 and frame_index % interval == 0
+
+    def _release_cuda_memory(self) -> None:
+        gc.collect()
+        try:
+            import torch
+        except Exception:
+            return
+
+        cuda = getattr(torch, "cuda", None)
+        is_available = getattr(cuda, "is_available", None)
+        empty_cache = getattr(cuda, "empty_cache", None)
+        if not callable(is_available) or not callable(empty_cache):
+            return
+        try:
+            if is_available():
+                empty_cache()
+        except Exception:
+            logger.debug("Could not clear PyTorch CUDA cache after D4SM operation", exc_info=True)
+
+    def _is_cuda_out_of_memory(self, exc: BaseException) -> bool:
+        seen: set[int] = set()
+        stack: list[BaseException | None] = [exc]
+        while stack:
+            current = stack.pop()
+            if current is None or id(current) in seen:
+                continue
+            seen.add(id(current))
+            if current.__class__.__name__ == "OutOfMemoryError":
+                return True
+            message = str(current).lower()
+            if "cuda out of memory" in message:
+                return True
+            stack.extend([current.__cause__, current.__context__])
+        return False
 
     def _missing_module_name(self, exc: BaseException) -> str | None:
         seen: set[int] = set()

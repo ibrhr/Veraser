@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from app.schemas.performance import OperationSpeedMetric
 from app.schemas.prompts import StoredObjectPrompt
@@ -48,6 +48,19 @@ class VideoMaskingModel(Protocol):
         objects: list[StoredObjectPrompt],
     ) -> VideoMaskingResult:
         """Generate object masks for every video frame."""
+
+
+@runtime_checkable
+class VideoPathMaskingModel(VideoMaskingModel, Protocol):
+    def generate_masks_from_video(
+        self,
+        *,
+        session_id: str,
+        video_path: Path,
+        output_dir: Path,
+        objects: list[StoredObjectPrompt],
+    ) -> VideoMaskingResult:
+        """Generate object masks directly from a video file."""
 
 
 class VideoInpaintingModel(Protocol):

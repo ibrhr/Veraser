@@ -1,4 +1,5 @@
 import logging
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,8 +18,14 @@ def configure_logging(settings: Settings) -> None:
     logging.getLogger("app").setLevel(level)
 
 
+def configure_runtime_environment(settings: Settings) -> None:
+    if settings.pytorch_cuda_alloc_conf:
+        os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", settings.pytorch_cuda_alloc_conf)
+
+
 def create_app() -> FastAPI:
     settings = Settings()
+    configure_runtime_environment(settings)
     configure_logging(settings)
     app = FastAPI(
         title="Veraser",

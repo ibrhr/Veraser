@@ -76,4 +76,5 @@ def get_inpainting_job_service() -> InpaintingJobService:
         masking_job_service=get_masking_job_service(),
         artifact_service=get_mask_artifact_service(),
         model=get_video_inpainting_model(),
+        frame_extraction_service=get_video_frame_extraction_service(),
     )

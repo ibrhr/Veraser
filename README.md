@@ -172,11 +172,22 @@ export VERASER_D4SM_REPO_PATH=/path/to/d4sm
 export VERASER_D4SM_CHECKPOINT_DIR=/path/to/checkpoints
 export VERASER_D4SM_MODEL_SIZE=large
 export VERASER_D4SM_DEVICE=cuda:0
+export VERASER_D4SM_OFFLOAD_STATE_TO_CPU=true
 ```
+
+Veraser defaults `VERASER_D4SM_OFFLOAD_STATE_TO_CPU=true` so longer videos do
+not keep all tracking state on the GPU. For short videos on high-memory GPUs,
+set it to `false` for faster tracking. Veraser also sets
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` by default before loading
+PyTorch; set `VERASER_PYTORCH_CUDA_ALLOC_CONF` to override that allocator hint,
+or export `PYTORCH_CUDA_ALLOC_CONF` yourself before starting the API.
 
 The API records prompts separately from inference. After adding prompted objects,
 frontend clients can list, update, delete, and preview object selections before
-starting full-video tracking.
+starting full-video tracking. Full-video D4SM masking reads the uploaded video
+stream directly and feeds frames into the DAM4SAM tracker state; it does not
+pre-extract a PNG sequence for masking. Source frames are only materialized later
+if an inpainting job is started, because the STTN adapter consumes frame files.
 
 STTN integration
 ----------------

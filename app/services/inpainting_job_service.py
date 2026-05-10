@@ -1,16 +1,18 @@
 from datetime import UTC, datetime
 import logging
+from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
 
 from app.models.base import VideoInpaintingModel
 from app.schemas.masking import InpaintingJobResponse
-from app.schemas.performance import build_speed_metric
+from app.schemas.performance import OperationSpeedMetric, build_speed_metric
 from app.services.errors import InpaintingJobNotFoundError, MaskingJobNotFoundError, ModelRuntimeError, SessionNotFoundError
 from app.services.json_store import read_json, write_json
 from app.services.mask_artifact_service import MaskArtifactService
 from app.services.masking_job_service import MaskingJobService
 from app.services.session_service import VideoSessionService
+from app.services.video_frame_extraction_service import VideoFrameExtractionService
 
 
 logger = logging.getLogger(__name__)
@@ -24,11 +26,13 @@ class InpaintingJobService:
         masking_job_service: MaskingJobService,
         artifact_service: MaskArtifactService,
         model: VideoInpaintingModel,
+        frame_extraction_service: VideoFrameExtractionService | None = None,
     ) -> None:
         self.session_service = session_service
         self.masking_job_service = masking_job_service
         self.artifact_service = artifact_service
         self.model = model
+        self.frame_extraction_service = frame_extraction_service
 
     def create_job(self, session_id: str, masking_job_id: str) -> InpaintingJobResponse:
         self.session_service.get_metadata(session_id)
@@ -68,10 +72,41 @@ class InpaintingJobService:
     def run_job(self, session_id: str, masking_job_id: str) -> None:
         logger.info("Starting inpainting job session_id=%s masking_job_id=%s", session_id, masking_job_id)
         try:
-            self._update_job(session_id, masking_job_id, status="running", current_stage="inpainting")
+            self._update_job(session_id, masking_job_id, status="running", current_stage="preparing_frames")
             frames_dir = self.artifact_service.frames_dir(session_id)
             masks_dir = self.artifact_service.masks_dir(session_id, masking_job_id)
             output_video_path = self.artifact_service.processed_video_path(session_id, masking_job_id)
+            performance: list[OperationSpeedMetric] = []
+            if not any(frames_dir.glob("*.png")):
+                if self.frame_extraction_service is None:
+                    raise ModelRuntimeError("Source frames are missing; inpainting cannot start.")
+                video_path = Path(self.session_service.get_video_path(session_id))
+                logger.info(
+                    "Inpainting job extracting source frames session_id=%s masking_job_id=%s video_path=%s frames_dir=%s",
+                    session_id,
+                    masking_job_id,
+                    video_path,
+                    frames_dir,
+                )
+                extraction_started_at = perf_counter()
+                frames_total = self.frame_extraction_service.extract_frames(video_path=video_path, output_dir=frames_dir)
+                performance.append(
+                    build_speed_metric(
+                        name="frame_extraction",
+                        label="Frame extraction",
+                        elapsed_seconds=perf_counter() - extraction_started_at,
+                        frames_processed=frames_total,
+                    )
+                )
+                self._update_job(
+                    session_id,
+                    masking_job_id,
+                    frames_total=frames_total,
+                    current_stage="inpainting",
+                    performance=performance,
+                )
+            else:
+                self._update_job(session_id, masking_job_id, current_stage="inpainting")
             logger.info(
                 "Inpainting job running model session_id=%s masking_job_id=%s frames_dir=%s masks_dir=%s output_video_path=%s",
                 session_id,
@@ -103,7 +138,7 @@ class InpaintingJobService:
                 elapsed_seconds=elapsed,
                 frames_processed=result.frames_done,
             )
-            performance = result.performance or [fallback_metric]
+            performance.extend(result.performance or [fallback_metric])
             self._update_job(
                 session_id,
                 masking_job_id,

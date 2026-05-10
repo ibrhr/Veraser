@@ -4,7 +4,7 @@ from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
 
-from app.models.base import VideoMaskingModel
+from app.models.base import VideoMaskingModel, VideoPathMaskingModel
 from app.schemas.masking import MaskingJobResponse
 from app.schemas.performance import OperationSpeedMetric, build_speed_metric
 from app.schemas.prompts import StoredObjectPrompt
@@ -63,67 +63,85 @@ class MaskingJobService:
     def run_job(self, session_id: str, job_id: str) -> None:
         logger.info("Starting masking job session_id=%s job_id=%s", session_id, job_id)
         try:
-            job = self._update_job(
+            self._update_job(
                 session_id,
                 job_id,
                 status="running",
-                current_stage="extracting_frames",
+                current_stage="starting",
             )
             performance: list[OperationSpeedMetric] = []
             video_path = Path(self.session_service.get_video_path(session_id))
-            frames_dir = self.artifact_service.frames_dir(session_id)
-            logger.info(
-                "Masking job extracting frames session_id=%s job_id=%s video_path=%s frames_dir=%s",
-                session_id,
-                job_id,
-                video_path,
-                frames_dir,
-            )
-            extraction_started_at = perf_counter()
-            frames_total = self.frame_extraction_service.extract_frames(
-                video_path=video_path,
-                output_dir=frames_dir,
-            )
-            extraction_elapsed = perf_counter() - extraction_started_at
-            logger.info(
-                "Masking job frame extraction complete session_id=%s job_id=%s frames_total=%s elapsed_seconds=%.4f",
-                session_id,
-                job_id,
-                frames_total,
-                extraction_elapsed,
-            )
-            performance.append(
-                build_speed_metric(
-                    name="frame_extraction",
-                    label="Frame extraction",
-                    elapsed_seconds=extraction_elapsed,
-                    frames_processed=frames_total,
-                )
-            )
-            job = self._update_job(
-                session_id,
-                job_id,
-                frames_total=frames_total,
-                current_stage="generating_masks",
-                performance=performance,
-            )
-            masking_started_at = perf_counter()
             objects = self._get_objects(session_id)
             masks_dir = self.artifact_service.masks_dir(session_id, job_id)
-            logger.info(
-                "Masking job generating masks session_id=%s job_id=%s object_count=%s frames_dir=%s masks_dir=%s",
-                session_id,
-                job_id,
-                len(objects),
-                frames_dir,
-                masks_dir,
-            )
-            result = self.model.generate_masks(
-                session_id=session_id,
-                frames_dir=frames_dir,
-                output_dir=masks_dir,
-                objects=objects,
-            )
+            if isinstance(self.model, VideoPathMaskingModel):
+                self._update_job(session_id, job_id, current_stage="generating_masks", performance=performance)
+                masking_started_at = perf_counter()
+                logger.info(
+                    "Masking job generating masks from video session_id=%s job_id=%s object_count=%s video_path=%s masks_dir=%s",
+                    session_id,
+                    job_id,
+                    len(objects),
+                    video_path,
+                    masks_dir,
+                )
+                result = self.model.generate_masks_from_video(
+                    session_id=session_id,
+                    video_path=video_path,
+                    output_dir=masks_dir,
+                    objects=objects,
+                )
+            else:
+                frames_dir = self.artifact_service.frames_dir(session_id)
+                logger.info(
+                    "Masking job extracting frames session_id=%s job_id=%s video_path=%s frames_dir=%s",
+                    session_id,
+                    job_id,
+                    video_path,
+                    frames_dir,
+                )
+                extraction_started_at = perf_counter()
+                frames_total = self.frame_extraction_service.extract_frames(
+                    video_path=video_path,
+                    output_dir=frames_dir,
+                )
+                extraction_elapsed = perf_counter() - extraction_started_at
+                logger.info(
+                    "Masking job frame extraction complete session_id=%s job_id=%s frames_total=%s elapsed_seconds=%.4f",
+                    session_id,
+                    job_id,
+                    frames_total,
+                    extraction_elapsed,
+                )
+                performance.append(
+                    build_speed_metric(
+                        name="frame_extraction",
+                        label="Frame extraction",
+                        elapsed_seconds=extraction_elapsed,
+                        frames_processed=frames_total,
+                    )
+                )
+                self._update_job(
+                    session_id,
+                    job_id,
+                    frames_total=frames_total,
+                    current_stage="generating_masks",
+                    performance=performance,
+                )
+                masking_started_at = perf_counter()
+                logger.info(
+                    "Masking job generating masks from extracted frames session_id=%s job_id=%s object_count=%s frames_dir=%s masks_dir=%s",
+                    session_id,
+                    job_id,
+                    len(objects),
+                    frames_dir,
+                    masks_dir,
+                )
+                result = self.model.generate_masks(
+                    session_id=session_id,
+                    frames_dir=frames_dir,
+                    output_dir=masks_dir,
+                    objects=objects,
+                )
             masking_elapsed = perf_counter() - masking_started_at
             logger.info(
                 "Masking job mask generation complete session_id=%s job_id=%s frames_done=%s frames_total=%s manifest_path=%s elapsed_seconds=%.4f",

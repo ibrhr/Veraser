@@ -98,6 +98,7 @@ def write_env_hint(repo_dir: Path, checkpoint_dir: Path, model_size: str) -> Non
     print(f"export VERASER_D4SM_CHECKPOINT_DIR={checkpoint_dir.resolve()}")
     if model_size != "all":
         print(f"export VERASER_D4SM_MODEL_SIZE={model_size}")
+    print("export VERASER_D4SM_OFFLOAD_STATE_TO_CPU=true")
     print("\nDefault Veraser config already points to var/models/d4sm.")
 
 

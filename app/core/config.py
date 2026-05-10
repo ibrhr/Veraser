@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     app_name: str = "Veraser"
     api_version: str = "v1"
     log_level: str = "INFO"
+    pytorch_cuda_alloc_conf: str | None = "expandable_segments:True"
     session_storage_dir: Path = Path("var/video-sessions")
     max_upload_bytes: int = 1_073_741_824
     accepted_video_extensions: set[str] = Field(
@@ -36,7 +37,8 @@ class Settings(BaseSettings):
     d4sm_model_size: str = "large"
     d4sm_device: str = "cuda:0"
     d4sm_lazy_load: bool = True
-    d4sm_offload_state_to_cpu: bool = False
+    d4sm_offload_state_to_cpu: bool = True
+    d4sm_clear_cuda_cache_interval: int = 25
 
     sttn_repo_path: Path = Path("var/models/sttn")
     sttn_checkpoint_path: Path = Path("var/models/sttn/checkpoints/sttn.pth")
