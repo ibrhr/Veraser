@@ -531,14 +531,15 @@ export default function App() {
                     <small>{object.prompts.length} prompts</small>
                   </button>
                   <button
-                    className="icon-button"
-                    title="Preview mask"
+                    className="secondary-button small"
+                    title="Preview first-frame mask"
                     onClick={() => {
                       setPreviewObjectId(object.object_id);
                       setPreviewNonce((current) => current + 1);
                     }}
                   >
                     <Eye size={16} />
+                    Preview
                   </button>
                   <button className="icon-button danger" title="Delete object" onClick={() => void removeObject(object.object_id)}>
                     <Trash2 size={16} />
@@ -588,7 +589,7 @@ export default function App() {
                   <KonvaImage image={trackedMaskImage} width={frameSize.width} height={frameSize.height} opacity={0.45} />
                 ) : null}
                 {previewImage ? (
-                  <KonvaImage image={previewImage} width={frameSize.width} height={frameSize.height} opacity={0.4} />
+                  <KonvaImage image={previewImage} width={frameSize.width} height={frameSize.height} opacity={0.85} />
                 ) : null}
                 <Group>
                   {visiblePrompts.map((prompt, index) =>

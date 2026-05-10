@@ -140,11 +140,8 @@ class MaskPromptService:
         object_prompt = next((item for item in objects if item.object_id == object_id), None)
         if object_prompt is None:
             raise ObjectPromptNotFoundError(f"Object prompt {object_id} was not found.")
-        preview_path = self.artifact_service.object_preview_mask_path(session_id, object_id)
-        if not preview_path.exists():
-            logger.info("Preview mask missing; regenerating session_id=%s object_id=%s", session_id, object_id)
-            self._write_preview_mask(session_id=session_id, object_prompt=object_prompt)
-        return preview_path
+        logger.info("Regenerating preview mask session_id=%s object_id=%s", session_id, object_id)
+        return self._write_preview_mask(session_id=session_id, object_prompt=object_prompt)
 
     def _validate_prompt_bounds(
         self,
@@ -189,7 +186,7 @@ class MaskPromptService:
             preview_path,
         )
 
-        image = Image.new("L", (width, height), 0)
+        image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(image)
         for prompt_index, prompt in enumerate(object_prompt.prompts):
             logger.debug(
@@ -200,7 +197,7 @@ class MaskPromptService:
                 prompt.type,
             )
             if isinstance(prompt, BoxPrompt):
-                draw.rectangle((prompt.x1, prompt.y1, prompt.x2, prompt.y2), fill=255)
+                draw.rectangle((prompt.x1, prompt.y1, prompt.x2, prompt.y2), fill=(23, 105, 170, 180))
             if isinstance(prompt, PointPrompt) and prompt.label == "foreground":
                 radius = max(4, min(width, height) // 100)
                 draw.ellipse(
@@ -210,7 +207,7 @@ class MaskPromptService:
                         prompt.x + radius,
                         prompt.y + radius,
                     ),
-                    fill=255,
+                    fill=(49, 196, 141, 220),
                 )
         image.save(preview_path)
         return preview_path
