@@ -62,6 +62,7 @@ function useHtmlImage(src: string | null, label: string): ImageLoadState {
       setState({ image: null, error: null });
       return;
     }
+    const imageSrc = src;
     let cancelled = false;
     let objectUrl: string | null = null;
     const controller = new AbortController();
@@ -71,7 +72,7 @@ function useHtmlImage(src: string | null, label: string): ImageLoadState {
 
     async function loadImage() {
       try {
-        const response = await fetch(src, { cache: "no-store", signal: controller.signal });
+        const response = await fetch(imageSrc, { cache: "no-store", signal: controller.signal });
         if (!response.ok) {
           throw new Error(await responseErrorMessage(response, label));
         }

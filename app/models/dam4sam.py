@@ -47,7 +47,7 @@ class D4smVideoMaskingModel:
                 "Run `python3 scripts/setup_d4sm.py --model-size large` first."
             )
 
-        repo_path = str(self.settings.d4sm_repo_path)
+        repo_path = str(self.settings.d4sm_repo_path.resolve())
         if repo_path not in sys.path:
             sys.path.insert(0, repo_path)
 
@@ -320,11 +320,18 @@ class D4smVideoMaskingModel:
     def _create_tracker(self) -> Any:
         if self._tracker_class is None:
             raise ModelRuntimeError("D4SM tracker class is not loaded.")
+        checkpoint_dir = self.settings.d4sm_checkpoint_dir.resolve()
+        checkpoint_path = checkpoint_dir / f"sam2.1_hiera_{self.settings.d4sm_model_size}.pt"
+        if not checkpoint_path.exists():
+            raise ModelRuntimeError(
+                f"D4SM checkpoint was not found at {checkpoint_path}. "
+                f"Run `uv run python scripts/setup_d4sm.py --model-size {self.settings.d4sm_model_size}`."
+            )
         try:
             with self._d4sm_working_directory():
                 return self._tracker_class(
                     model_size=self.settings.d4sm_model_size,
-                    checkpoint_dir=str(self.settings.d4sm_checkpoint_dir),
+                    checkpoint_dir=str(checkpoint_dir),
                     offload_state_to_cpu=self.settings.d4sm_offload_state_to_cpu,
                 )
         except ModuleNotFoundError as exc:
@@ -417,7 +424,7 @@ class D4smVideoMaskingModel:
     @contextmanager
     def _d4sm_working_directory(self):
         previous_cwd = Path.cwd()
-        os.chdir(self.settings.d4sm_repo_path)
+        os.chdir(self.settings.d4sm_repo_path.resolve())
         try:
             yield
         finally:
