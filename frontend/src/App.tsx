@@ -197,7 +197,7 @@ export default function App() {
   const stageHeight = Math.max(180, Math.round(frameSize.height * scale));
 
   const selectedObject = objects.find((object) => object.object_id === selectedObjectId) ?? null;
-  const visiblePrompts = selectedObjectId ? draftPrompts : draftPrompts;
+  const visiblePrompts = previewImage ? [] : draftPrompts;
 
   const refreshObjects = useCallback(async (sessionId: string) => {
     const response = await listObjects(sessionId);
@@ -378,6 +378,14 @@ export default function App() {
   }
 
   function selectObject(object: StoredObjectPrompt) {
+    setError(null);
+    setSelectedObjectId(object.object_id);
+    setDraftPrompts(object.prompts);
+    setPreviewObjectId(null);
+  }
+
+  function previewObject(object: StoredObjectPrompt) {
+    setError(null);
     setSelectedObjectId(object.object_id);
     setDraftPrompts(object.prompts);
     setPreviewObjectId(object.object_id);
@@ -385,6 +393,7 @@ export default function App() {
   }
 
   function startNewObject() {
+    setError(null);
     setSelectedObjectId(null);
     setDraftPrompts([]);
     setPreviewObjectId(null);
@@ -403,6 +412,7 @@ export default function App() {
       return;
     }
     if (tool === "point") {
+      setPreviewObjectId(null);
       const prompt: PointPrompt = {
         type: "point",
         x: clamp(point.x, frameSize.width - 1),
@@ -412,6 +422,7 @@ export default function App() {
       setDraftPrompts((current) => [...current, prompt]);
       return;
     }
+    setPreviewObjectId(null);
     setDraftBox({ x1: point.x, y1: point.y, x2: point.x, y2: point.y });
   }
 
@@ -442,6 +453,7 @@ export default function App() {
   }
 
   function removePrompt(index: number) {
+    setPreviewObjectId(null);
     setDraftPrompts((current) => current.filter((_, promptIndex) => promptIndex !== index));
   }
 
@@ -570,12 +582,7 @@ export default function App() {
                   <button
                     className="secondary-button small"
                     title="Preview first-frame mask"
-                    onClick={() => {
-                      setSelectedObjectId(object.object_id);
-                      setDraftPrompts(object.prompts);
-                      setPreviewObjectId(object.object_id);
-                      setPreviewNonce((current) => current + 1);
-                    }}
+                    onClick={() => previewObject(object)}
                   >
                     <Eye size={16} />
                     Preview

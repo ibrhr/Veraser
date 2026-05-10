@@ -163,6 +163,8 @@ async def get_object_preview_mask(
         preview_path = service.get_preview_mask_path(session_id=session_id, object_id=object_id)
     except (SessionNotFoundError, ObjectPromptNotFoundError) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ModelRuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     return FileResponse(
         preview_path,
         media_type="image/png",

@@ -193,6 +193,48 @@ class D4smVideoMaskingModel:
             performance=performance,
         )
 
+    def write_object_preview_mask(
+        self,
+        *,
+        session_id: str,
+        first_frame_path: Path,
+        output_path: Path,
+        object_prompt: StoredObjectPrompt,
+    ) -> Path:
+        self.load()
+        if self._tracker_class is None:
+            raise ModelRuntimeError("D4SM tracker class is not loaded.")
+
+        logger.info(
+            "Generating D4SM first-frame preview mask session_id=%s object_id=%s first_frame_path=%s output_path=%s",
+            session_id,
+            object_prompt.object_id,
+            first_frame_path,
+            output_path,
+        )
+        image = Image.open(first_frame_path).convert("RGB")
+        init_regions = self._objects_to_init_regions([object_prompt])
+        with self._d4sm_working_directory():
+            tracker = self._tracker_class(
+                model_size=self.settings.d4sm_model_size,
+                checkpoint_dir=str(self.settings.d4sm_checkpoint_dir),
+                offload_state_to_cpu=self.settings.d4sm_offload_state_to_cpu,
+            )
+        tracker.initialize(image, init_regions)
+        masks = self._initial_masks_from_tracker(tracker=tracker, image_size=image.size)
+        if not masks:
+            raise ModelRuntimeError("D4SM did not return a first-frame preview mask.")
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        self._write_preview_overlay(mask=masks[0], output_path=output_path)
+        logger.info(
+            "Generated D4SM first-frame preview mask session_id=%s object_id=%s output_path=%s",
+            session_id,
+            object_prompt.object_id,
+            output_path,
+        )
+        return output_path
+
     def _objects_to_init_regions(self, objects: list[StoredObjectPrompt]) -> list[dict[str, Any]]:
         init_regions = []
         for item in objects:
@@ -283,6 +325,54 @@ class D4smVideoMaskingModel:
             "combined_mask": str(combined_path),
             "object_masks": object_paths,
         }
+
+    def _initial_masks_from_tracker(self, *, tracker: Any, image_size: tuple[int, int]) -> list[Any]:
+        import numpy as np
+        import torch
+
+        width, height = image_size
+        masks = []
+        for object_id in getattr(tracker, "all_obj_ids", []):
+            object_outputs = tracker.per_object_outputs_all.get(object_id, [])
+            if not object_outputs:
+                continue
+            pred_masks = object_outputs[0].get("pred_masks")
+            if pred_masks is None:
+                continue
+            if isinstance(pred_masks, torch.Tensor):
+                mask_tensor = pred_masks.detach()
+                if mask_tensor.ndim == 3:
+                    mask_tensor = mask_tensor.unsqueeze(0)
+                if mask_tensor.ndim != 4:
+                    raise ModelRuntimeError(f"Unexpected D4SM preview mask tensor shape: {tuple(mask_tensor.shape)}")
+                resized = torch.nn.functional.interpolate(
+                    mask_tensor,
+                    size=(height, width),
+                    mode="bilinear",
+                    align_corners=False,
+                )
+                masks.append((resized[0, 0] > 0).cpu().numpy().astype("uint8"))
+                continue
+
+            mask_array = np.asarray(pred_masks)
+            mask_array = np.squeeze(mask_array)
+            if mask_array.ndim != 2:
+                raise ModelRuntimeError(f"Unexpected D4SM preview mask array shape: {mask_array.shape}")
+            mask_image = Image.fromarray((mask_array > 0).astype("uint8") * 255)
+            masks.append((np.asarray(mask_image.resize((width, height), Image.NEAREST)) > 0).astype("uint8"))
+        return masks
+
+    def _write_preview_overlay(self, *, mask: Any, output_path: Path) -> None:
+        import numpy as np
+
+        mask_array = (np.asarray(mask) > 0).astype("uint8")
+        alpha = mask_array * 180
+        overlay = np.zeros((mask_array.shape[0], mask_array.shape[1], 4), dtype="uint8")
+        overlay[..., 0] = 20
+        overlay[..., 1] = 184
+        overlay[..., 2] = 166
+        overlay[..., 3] = alpha
+        Image.fromarray(overlay, mode="RGBA").save(output_path)
 
     @contextmanager
     def _d4sm_working_directory(self):

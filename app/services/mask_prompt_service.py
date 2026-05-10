@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from PIL import Image, ImageDraw
@@ -29,9 +30,11 @@ class MaskPromptService:
         *,
         session_service: VideoSessionService,
         artifact_service: MaskArtifactService,
+        preview_model: Any | None = None,
     ) -> None:
         self.session_service = session_service
         self.artifact_service = artifact_service
+        self.preview_model = preview_model
 
     def submit_prompts(
         self,
@@ -74,7 +77,7 @@ class MaskPromptService:
             len(stored_objects),
         )
         for stored_object in objects:
-            self._write_preview_mask(session_id=session_id, object_prompt=stored_object)
+            self._write_prompt_preview_mask(session_id=session_id, object_prompt=stored_object)
 
         return SubmitObjectPromptsResponse(session_id=session_id, objects=stored_objects)
 
@@ -111,7 +114,7 @@ class MaskPromptService:
                 )
                 objects[index] = updated
                 self._write_objects(self.session_service.get_prompts_path(session_id), objects)
-                preview_path = self._write_preview_mask(session_id=session_id, object_prompt=updated)
+                preview_path = self._write_prompt_preview_mask(session_id=session_id, object_prompt=updated)
                 logger.info("Updated object prompt session_id=%s object_id=%s preview_path=%s", session_id, object_id, preview_path)
                 return ObjectPromptResponse(
                     session_id=session_id,
@@ -143,7 +146,15 @@ class MaskPromptService:
         if object_prompt is None:
             raise ObjectPromptNotFoundError(f"Object prompt {object_id} was not found.")
         logger.info("Regenerating preview mask session_id=%s object_id=%s", session_id, object_id)
-        return self._write_preview_mask(session_id=session_id, object_prompt=object_prompt)
+        if self.preview_model is not None:
+            metadata = self.session_service.get_metadata(session_id)
+            return self.preview_model.write_object_preview_mask(
+                session_id=session_id,
+                first_frame_path=Path(metadata["paths"]["first_frame"]),
+                output_path=self.artifact_service.object_preview_mask_path(session_id, object_id),
+                object_prompt=object_prompt,
+            )
+        return self._write_prompt_preview_mask(session_id=session_id, object_prompt=object_prompt)
 
     def _validate_prompt_bounds(
         self,
@@ -174,7 +185,7 @@ class MaskPromptService:
     def _write_objects(self, prompt_path: Path, objects: list[StoredObjectPrompt]) -> None:
         write_json(prompt_path, [stored_object.model_dump(mode="json") for stored_object in objects])
 
-    def _write_preview_mask(self, *, session_id: str, object_prompt: StoredObjectPrompt) -> Path:
+    def _write_prompt_preview_mask(self, *, session_id: str, object_prompt: StoredObjectPrompt) -> Path:
         metadata = self.session_service.get_metadata(session_id)
         width = metadata["first_frame"]["width"]
         height = metadata["first_frame"]["height"]

@@ -45,6 +45,7 @@ def get_mask_prompt_service() -> MaskPromptService:
     return MaskPromptService(
         session_service=get_video_session_service(),
         artifact_service=get_mask_artifact_service(),
+        preview_model=get_video_masking_model(),
     )
 
 
