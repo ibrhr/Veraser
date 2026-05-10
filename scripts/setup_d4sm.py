@@ -91,6 +91,8 @@ def download_checkpoint(checkpoint_dir: Path, filename: str) -> None:
 
 
 def write_env_hint(repo_dir: Path, checkpoint_dir: Path, model_size: str) -> None:
+    print("\nInstall the Python runtime dependencies before starting the API:")
+    print("uv sync --group gpu")
     print("\nSet these values if you use non-default paths:")
     print(f"export VERASER_D4SM_REPO_PATH={repo_dir.resolve()}")
     print(f"export VERASER_D4SM_CHECKPOINT_DIR={checkpoint_dir.resolve()}")

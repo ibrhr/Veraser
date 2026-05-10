@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
@@ -33,6 +34,8 @@ from app.services.mask_artifact_service import MaskArtifactService
 from app.services.masking_job_service import MaskingJobService
 from app.services.mask_prompt_service import MaskPromptService
 from app.services.session_service import VideoSessionService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["video masking"])
 
@@ -164,6 +167,12 @@ async def get_object_preview_mask(
     except (SessionNotFoundError, ObjectPromptNotFoundError) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ModelRuntimeError as exc:
+        logger.exception(
+            "Could not generate object preview mask session_id=%s object_id=%s error=%s",
+            session_id,
+            object_id,
+            exc,
+        )
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     return FileResponse(
         preview_path,

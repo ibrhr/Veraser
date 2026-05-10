@@ -63,28 +63,64 @@ function useHtmlImage(src: string | null, label: string): ImageLoadState {
       return;
     }
     let cancelled = false;
+    let objectUrl: string | null = null;
+    const controller = new AbortController();
     const nextImage = new window.Image();
     nextImage.crossOrigin = "anonymous";
     setState({ image: null, error: null });
-    nextImage.onload = () => {
-      if (!cancelled) {
-        setState({ image: nextImage, error: null });
+
+    async function loadImage() {
+      try {
+        const response = await fetch(src, { cache: "no-store", signal: controller.signal });
+        if (!response.ok) {
+          throw new Error(await responseErrorMessage(response, label));
+        }
+        const blob = await response.blob();
+        objectUrl = URL.createObjectURL(blob);
+        nextImage.onload = () => {
+          if (!cancelled) {
+            setState({ image: nextImage, error: null });
+          }
+        };
+        nextImage.onerror = () => {
+          if (!cancelled) {
+            setState({ image: null, error: `Unable to decode ${label}.` });
+          }
+        };
+        nextImage.src = objectUrl;
+      } catch (cause) {
+        if (!cancelled && cause instanceof Error && cause.name !== "AbortError") {
+          setState({ image: null, error: cause.message });
+        }
       }
-    };
-    nextImage.onerror = () => {
-      if (!cancelled) {
-        setState({ image: null, error: `Unable to load ${label}.` });
-      }
-    };
-    nextImage.src = src;
+    }
+
+    void loadImage();
     return () => {
       cancelled = true;
+      controller.abort();
       nextImage.onload = null;
       nextImage.onerror = null;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
     };
   }, [label, src]);
 
   return state;
+}
+
+async function responseErrorMessage(response: Response, label: string) {
+  try {
+    const body = await response.json();
+    if (typeof body.detail === "string") {
+      return body.detail;
+    }
+    return JSON.stringify(body.detail ?? body);
+  } catch {
+    const text = await response.text();
+    return text || `Unable to load ${label}: ${response.status} ${response.statusText}`;
+  }
 }
 
 function clamp(value: number, max: number) {

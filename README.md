@@ -98,6 +98,10 @@ This clones D4SM and STTN, then downloads their checkpoints under `var/models/`.
 API-only tests and GUI development do not require GPU dependencies or model
 weights.
 
+If D4SM preview or tracing fails with a missing package such as `iopath`, rerun
+`uv sync --group gpu`; `scripts/setup_d4sm.py` only prepares the model checkout
+and checkpoint files.
+
 Current status
 --------------
 
