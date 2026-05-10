@@ -43,8 +43,8 @@ class Settings(BaseSettings):
     sttn_repo_path: Path = Path("var/models/sttn")
     sttn_checkpoint_path: Path = Path("var/models/sttn/checkpoints/sttn.pth")
     sttn_device: str = "cuda:0"
-    sttn_width: int = 432
-    sttn_height: int = 240
+    sttn_width: int = 688
+    sttn_height: int = 480
     sttn_ref_length: int = 10
     sttn_neighbor_stride: int = 5
     sttn_mask_dilation_iterations: int = 4
