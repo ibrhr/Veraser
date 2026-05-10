@@ -45,8 +45,8 @@ Prepare the DAM4SAM/D4SM runtime on a CUDA machine:
 
 ```bash
 uv sync --group gpu
-python3 scripts/setup_d4sm.py --model-size large
-python3 scripts/setup_sttn.py
+uv run python scripts/setup_d4sm.py --model-size large
+uv run python scripts/setup_sttn.py
 ```
 
 This clones D4SM and STTN, then downloads their checkpoints under `var/models/`.
@@ -95,7 +95,7 @@ var/models/d4sm/checkpoints/
 Prepare that cache on a CUDA machine with:
 
 ```bash
-python3 scripts/setup_d4sm.py --model-size large
+uv run python scripts/setup_d4sm.py --model-size large
 ```
 
 The script clones `https://github.com/alanlukezic/d4sm.git` into
@@ -145,13 +145,15 @@ Prepare that cache on a CUDA machine with:
 
 ```bash
 uv sync --group gpu
-python3 scripts/setup_sttn.py
+uv run python scripts/setup_sttn.py
 ```
 
 The script clones `https://github.com/researchmm/STTN.git` into
 `var/models/sttn` and downloads the official pretrained YouTube-VOS checkpoint
 from the Google Drive file linked by the STTN README. The `gpu` group includes
-`gdown` for this checkpoint download.
+`gdown` for this checkpoint download. If you run the script with system
+`python3`, it will fall back to `uv run --group gpu python -m gdown` when `uv`
+is available.
 
 STTN inference is isolated behind `SttnVideoInpaintingModel`. Its defaults match
 the official test script: 432 x 240 inference, `ref_length=10`,
@@ -236,8 +238,8 @@ uv run pytest
 
 # Runtime model setup on CUDA hosts
 uv sync --group gpu
-python3 scripts/setup_d4sm.py --model-size large
-python3 scripts/setup_sttn.py
+uv run python scripts/setup_d4sm.py --model-size large
+uv run python scripts/setup_sttn.py
 
 # Frontend dev server
 cd frontend

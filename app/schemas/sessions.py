@@ -3,6 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.performance import OperationSpeedMetric
 from app.schemas.prompts import StoredObjectPrompt
 
 
@@ -30,6 +31,7 @@ class VideoSessionResponse(BaseModel):
     created_at: datetime
     video: VideoMetadata
     first_frame: FirstFrameInfo
+    performance: list[OperationSpeedMetric] = Field(default_factory=list)
 
 
 class VideoSessionDetail(VideoSessionResponse):

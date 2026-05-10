@@ -1,12 +1,14 @@
 from datetime import UTC, datetime
 from pathlib import Path
 import shutil
+from time import perf_counter
 from uuid import uuid4
 
 from fastapi import UploadFile
 
 from app.core.config import Settings
 from app.schemas.prompts import StoredObjectPrompt
+from app.schemas.performance import build_speed_metric
 from app.schemas.sessions import FirstFrameInfo, VideoMetadata, VideoSessionDetail, VideoSessionResponse
 from app.services.errors import SessionNotFoundError, UploadRejectedError
 from app.services.frame_service import VideoFrameService
@@ -26,16 +28,20 @@ class VideoSessionService:
         session_dir.mkdir(parents=True, exist_ok=False)
 
         video_path = session_dir / self._safe_video_filename(upload.filename)
+        upload_started_at = perf_counter()
         size_bytes = await self._write_upload(upload=upload, path=video_path)
+        upload_elapsed = perf_counter() - upload_started_at
         if size_bytes > self.settings.max_upload_bytes:
             shutil.rmtree(session_dir, ignore_errors=True)
             raise UploadRejectedError("Uploaded video exceeds the configured size limit.")
 
         first_frame_path = session_dir / f"first_frame.{self.settings.first_frame_format}"
+        first_frame_started_at = perf_counter()
         width, height = self.frame_service.extract_first_frame(
             video_path=video_path,
             output_path=first_frame_path,
         )
+        first_frame_elapsed = perf_counter() - first_frame_started_at
 
         created_at = datetime.now(UTC)
         response = VideoSessionResponse(
@@ -53,6 +59,19 @@ class VideoSessionService:
                 height=height,
                 url=f"/api/v1/video-sessions/{session_id}/first-frame",
             ),
+            performance=[
+                build_speed_metric(
+                    name="upload_write",
+                    label="Upload write",
+                    elapsed_seconds=upload_elapsed,
+                ),
+                build_speed_metric(
+                    name="first_frame_extract",
+                    label="First frame extraction",
+                    elapsed_seconds=first_frame_elapsed,
+                    frames_processed=1,
+                ),
+            ],
         )
 
         write_json(

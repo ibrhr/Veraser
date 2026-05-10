@@ -124,6 +124,45 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.speed-panel {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.speed-panel h2 {
+  color: #344054;
+  font-size: 12px;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.speed-list {
+  display: grid;
+  gap: 6px;
+}
+
+.speed-row {
+  background: #f8fafc;
+  border: 1px solid #e4e8ee;
+  border-radius: 7px;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(120px, 1fr) repeat(3, minmax(70px, auto));
+  padding: 8px;
+}
+
+.speed-row strong,
+.speed-row span {
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.speed-row span {
+  color: #475467;
+  text-align: right;
+}
+
 .primary-button,
 .secondary-button,
 .icon-button,
@@ -303,6 +342,19 @@ button:disabled {
   justify-content: flex-start;
 }
 
+.speed-summary {
+  align-items: start;
+  display: grid;
+  flex: 1;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 280px;
+}
+
+.speed-summary .speed-panel {
+  margin-top: 0;
+}
+
 .result-strip label {
   align-items: center;
   display: inline-flex;
@@ -380,5 +432,14 @@ button:disabled {
 
   .topbar {
     align-items: flex-start;
+  }
+
+  .speed-summary,
+  .speed-row {
+    grid-template-columns: 1fr;
+  }
+
+  .speed-row span {
+    text-align: left;
   }
 }

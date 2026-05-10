@@ -21,6 +21,15 @@ export type StoredObjectPrompt = {
   prompts: Prompt[];
 };
 
+export type OperationSpeedMetric = {
+  name: string;
+  label: string;
+  elapsed_seconds: number;
+  frames_processed?: number | null;
+  fps?: number | null;
+  seconds_per_frame?: number | null;
+};
+
 export type VideoSessionResponse = {
   session_id: string;
   status: "ready_for_prompts";
@@ -41,6 +50,7 @@ export type VideoSessionResponse = {
     content_type: "image/png";
     url: string;
   };
+  performance: OperationSpeedMetric[];
 };
 
 export type ObjectPromptListResponse = {
@@ -70,6 +80,7 @@ export type MaskingJobResponse = {
   frames_done: number;
   current_stage: string;
   error?: string | null;
+  performance: OperationSpeedMetric[];
   manifest_url: string;
   processed_video_url: string;
 };
@@ -85,6 +96,7 @@ export type InpaintingJobResponse = {
   frames_done: number;
   current_stage: string;
   error?: string | null;
+  performance: OperationSpeedMetric[];
   processed_video_url: string;
 };
 

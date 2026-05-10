@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -47,6 +49,19 @@ def run(command: list[str]) -> None:
     subprocess.run(command, check=True)
 
 
+def gdown_command() -> list[str]:
+    if importlib.util.find_spec("gdown") is not None:
+        return [sys.executable, "-m", "gdown"]
+
+    if shutil.which("uv"):
+        return ["uv", "run", "--group", "gpu", "python", "-m", "gdown"]
+
+    raise SystemExit(
+        "gdown is required to download the STTN checkpoint. "
+        "Install project dependencies with `uv sync --group gpu`, then rerun this script."
+    )
+
+
 def ensure_repo(repo_dir: Path) -> None:
     if repo_dir.exists():
         if not (repo_dir / ".git").exists():
@@ -69,12 +84,9 @@ def download_checkpoint(checkpoint_path: Path) -> None:
         temporary_path.unlink()
     run(
         [
-            sys.executable,
-            "-m",
-            "gdown",
-            "--id",
+            *gdown_command(),
             STTN_CHECKPOINT_FILE_ID,
-            "--output",
+            "-O",
             str(temporary_path),
         ]
     )

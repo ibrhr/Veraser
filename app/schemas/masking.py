@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.performance import OperationSpeedMetric
+
 
 MaskingJobStatus = Literal["pending", "running", "succeeded", "failed"]
 InpaintingJobStatus = Literal["pending", "running", "succeeded", "failed"]
@@ -18,6 +20,7 @@ class MaskingJobResponse(BaseModel):
     frames_done: int = 0
     current_stage: str = "queued"
     error: str | None = None
+    performance: list[OperationSpeedMetric] = Field(default_factory=list)
     manifest_url: str
     processed_video_url: str
 
@@ -42,4 +45,5 @@ class InpaintingJobResponse(BaseModel):
     frames_done: int = 0
     current_stage: str = "queued"
     error: str | None = None
+    performance: list[OperationSpeedMetric] = Field(default_factory=list)
     processed_video_url: str

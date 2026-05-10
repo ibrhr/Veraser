@@ -32,6 +32,7 @@ import type {
   InpaintingJobResponse,
   MaskArtifactManifest,
   MaskingJobResponse,
+  OperationSpeedMetric,
   PointPrompt,
   Prompt,
   StoredObjectPrompt,
@@ -94,6 +95,41 @@ function promptSummary(prompt: Prompt) {
     return `${prompt.label} point (${prompt.x}, ${prompt.y})`;
   }
   return `box (${prompt.x1}, ${prompt.y1}) -> (${prompt.x2}, ${prompt.y2})`;
+}
+
+function formatSeconds(value: number | null | undefined) {
+  if (value === null || value === undefined) {
+    return "-";
+  }
+  return `${value.toFixed(value >= 10 ? 2 : 3)}s`;
+}
+
+function formatRate(value: number | null | undefined, suffix: string) {
+  if (value === null || value === undefined) {
+    return "-";
+  }
+  return `${value.toFixed(value >= 10 ? 2 : 3)} ${suffix}`;
+}
+
+function SpeedMetrics({ title, metrics }: { title: string; metrics: OperationSpeedMetric[] }) {
+  if (metrics.length === 0) {
+    return null;
+  }
+  return (
+    <div className="speed-panel">
+      <h2>{title}</h2>
+      <div className="speed-list">
+        {metrics.map((metric) => (
+          <div className="speed-row" key={metric.name}>
+            <strong>{metric.label}</strong>
+            <span>{formatSeconds(metric.elapsed_seconds)}</span>
+            <span>{formatRate(metric.fps, "FPS")}</span>
+            <span>{formatRate(metric.seconds_per_frame, "s/frame")}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export default function App() {
@@ -417,6 +453,7 @@ export default function App() {
                 <dd>{objects.length}</dd>
               </div>
             </dl>
+            <SpeedMetrics title="Upload Speed" metrics={session?.performance ?? []} />
           </div>
 
           <div className="panel-section">
@@ -597,6 +634,10 @@ export default function App() {
             <div>
               <strong>Tracked mask</strong>
               <span>{manifest ? `${manifest.frames_total} frames` : "No manifest"}</span>
+            </div>
+            <div className="speed-summary">
+              <SpeedMetrics title="Trace Speed" metrics={job?.performance ?? []} />
+              <SpeedMetrics title="Inpaint Speed" metrics={inpaintingJob?.performance ?? []} />
             </div>
             <label>
               Frame

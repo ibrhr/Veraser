@@ -1,9 +1,11 @@
 from datetime import UTC, datetime
 from pathlib import Path
+from time import perf_counter
 from uuid import uuid4
 
 from app.models.base import VideoMaskingModel
 from app.schemas.masking import MaskingJobResponse
+from app.schemas.performance import OperationSpeedMetric, build_speed_metric
 from app.schemas.prompts import StoredObjectPrompt
 from app.services.errors import MaskingJobNotFoundError, ModelRuntimeError, SessionNotFoundError
 from app.services.json_store import read_json, write_json
@@ -60,23 +62,42 @@ class MaskingJobService:
                 status="running",
                 current_stage="extracting_frames",
             )
+            performance: list[OperationSpeedMetric] = []
             video_path = Path(self.session_service.get_video_path(session_id))
+            extraction_started_at = perf_counter()
             frames_total = self.frame_extraction_service.extract_frames(
                 video_path=video_path,
                 output_dir=self.artifact_service.frames_dir(session_id),
+            )
+            performance.append(
+                build_speed_metric(
+                    name="frame_extraction",
+                    label="Frame extraction",
+                    elapsed_seconds=perf_counter() - extraction_started_at,
+                    frames_processed=frames_total,
+                )
             )
             job = self._update_job(
                 session_id,
                 job_id,
                 frames_total=frames_total,
                 current_stage="generating_masks",
+                performance=performance,
             )
+            masking_started_at = perf_counter()
             result = self.model.generate_masks(
                 session_id=session_id,
                 frames_dir=self.artifact_service.frames_dir(session_id),
                 output_dir=self.artifact_service.masks_dir(session_id, job_id),
                 objects=self._get_objects(session_id),
             )
+            fallback_masking_metric = build_speed_metric(
+                name="mask_generation",
+                label="Mask generation",
+                elapsed_seconds=perf_counter() - masking_started_at,
+                frames_processed=result.frames_done,
+            )
+            performance.extend(result.performance or [fallback_masking_metric])
             self._update_job(
                 session_id,
                 job_id,
@@ -84,6 +105,7 @@ class MaskingJobService:
                 frames_total=result.frames_total,
                 frames_done=result.frames_done,
                 current_stage="complete",
+                performance=performance,
             )
         except Exception as exc:
             try:

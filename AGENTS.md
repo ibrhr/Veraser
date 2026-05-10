@@ -23,9 +23,9 @@ under `var/`, which is ignored by git.
 - `uv run uvicorn app.main:app --reload` starts the local API server.
 - `uv run pytest` runs the test suite.
 - `python3 -m compileall app tests scripts` performs a quick syntax/import pass.
-- `python3 scripts/setup_d4sm.py --model-size large` clones D4SM and downloads the
+- `uv run python scripts/setup_d4sm.py --model-size large` clones D4SM and downloads the
   default SAM 2.1 checkpoint into `var/models/d4sm`.
-- `python3 scripts/setup_sttn.py` clones STTN and downloads `sttn.pth` into
+- `uv run python scripts/setup_sttn.py` clones STTN and downloads `sttn.pth` into
   `var/models/sttn/checkpoints`.
 - `cd frontend && npm install` installs GUI dependencies.
 - `cd frontend && npm run dev` starts the Vite dev server at `localhost:5173`.

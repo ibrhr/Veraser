@@ -1,8 +1,10 @@
 from datetime import UTC, datetime
+from time import perf_counter
 from uuid import uuid4
 
 from app.models.base import VideoInpaintingModel
 from app.schemas.masking import InpaintingJobResponse
+from app.schemas.performance import build_speed_metric
 from app.services.errors import InpaintingJobNotFoundError, MaskingJobNotFoundError, ModelRuntimeError, SessionNotFoundError
 from app.services.json_store import read_json, write_json
 from app.services.mask_artifact_service import MaskArtifactService
@@ -58,12 +60,20 @@ class InpaintingJobService:
             frames_dir = self.artifact_service.frames_dir(session_id)
             masks_dir = self.artifact_service.masks_dir(session_id, masking_job_id)
             output_video_path = self.artifact_service.processed_video_path(session_id, masking_job_id)
+            started_at = perf_counter()
             result = self.model.inpaint_video(
                 session_id=session_id,
                 frames_dir=frames_dir,
                 masks_dir=masks_dir,
                 output_video_path=output_video_path,
             )
+            fallback_metric = build_speed_metric(
+                name="video_inpainting",
+                label="Video inpainting",
+                elapsed_seconds=perf_counter() - started_at,
+                frames_processed=result.frames_done,
+            )
+            performance = result.performance or [fallback_metric]
             self._update_job(
                 session_id,
                 masking_job_id,
@@ -71,6 +81,7 @@ class InpaintingJobService:
                 frames_total=result.frames_total,
                 frames_done=result.frames_done,
                 current_stage="complete",
+                performance=performance,
             )
         except Exception as exc:
             try:

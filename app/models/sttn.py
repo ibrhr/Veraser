@@ -5,12 +5,14 @@ from pathlib import Path
 import importlib
 import os
 import sys
+from time import perf_counter
 from typing import Any
 
 from PIL import Image
 
 from app.core.config import Settings
 from app.models.base import VideoInpaintingResult
+from app.schemas.performance import OperationSpeedMetric, build_speed_metric
 from app.services.errors import ModelRuntimeError
 
 
@@ -88,15 +90,53 @@ class SttnVideoInpaintingModel:
         if self._model is None or self._torch is None:
             raise ModelRuntimeError("STTN model is not loaded.")
 
+        performance: list[OperationSpeedMetric] = []
+        read_frames_started_at = perf_counter()
         frames, original_size = self._read_frames(frame_paths)
+        performance.append(
+            build_speed_metric(
+                name="sttn_read_frames",
+                label="STTN read frames",
+                elapsed_seconds=perf_counter() - read_frames_started_at,
+                frames_processed=len(frame_paths),
+            )
+        )
+        read_masks_started_at = perf_counter()
         masks, binary_masks = self._read_masks(mask_paths)
+        performance.append(
+            build_speed_metric(
+                name="sttn_read_masks",
+                label="STTN read masks",
+                elapsed_seconds=perf_counter() - read_masks_started_at,
+                frames_processed=len(mask_paths),
+            )
+        )
         output_video_path.parent.mkdir(parents=True, exist_ok=True)
+        inference_started_at = perf_counter()
         comp_frames = self._run_sttn(frames=frames, masks=masks, binary_masks=binary_masks)
+        performance.append(
+            build_speed_metric(
+                name="sttn_inference",
+                label="STTN inference",
+                elapsed_seconds=perf_counter() - inference_started_at,
+                frames_processed=len(frame_paths),
+            )
+        )
+        write_started_at = perf_counter()
         self._write_video(comp_frames, output_video_path, original_size)
+        performance.append(
+            build_speed_metric(
+                name="sttn_video_write",
+                label="STTN video write",
+                elapsed_seconds=perf_counter() - write_started_at,
+                frames_processed=len(comp_frames),
+            )
+        )
         return VideoInpaintingResult(
             frames_total=len(frame_paths),
             frames_done=len(frame_paths),
             video_path=output_video_path,
+            performance=performance,
         )
 
     def _read_frames(self, frame_paths: list[Path]) -> tuple[list[Any], tuple[int, int]]:

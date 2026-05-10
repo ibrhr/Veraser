@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Protocol
 
+from app.schemas.performance import OperationSpeedMetric
 from app.schemas.prompts import StoredObjectPrompt
 
 
@@ -11,10 +12,12 @@ class VideoMaskingResult:
         frames_total: int,
         frames_done: int,
         manifest_path: Path,
+        performance: list[OperationSpeedMetric] | None = None,
     ) -> None:
         self.frames_total = frames_total
         self.frames_done = frames_done
         self.manifest_path = manifest_path
+        self.performance = performance or []
 
 
 class VideoInpaintingResult:
@@ -24,10 +27,12 @@ class VideoInpaintingResult:
         frames_total: int,
         frames_done: int,
         video_path: Path,
+        performance: list[OperationSpeedMetric] | None = None,
     ) -> None:
         self.frames_total = frames_total
         self.frames_done = frames_done
         self.video_path = video_path
+        self.performance = performance or []
 
 
 class VideoMaskingModel(Protocol):

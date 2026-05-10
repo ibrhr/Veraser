@@ -2,12 +2,14 @@ from pathlib import Path
 from contextlib import contextmanager
 import os
 import sys
+from time import perf_counter
 from typing import Any
 
 from PIL import Image
 
 from app.core.config import Settings
 from app.models.base import VideoMaskingResult
+from app.schemas.performance import OperationSpeedMetric, build_speed_metric
 from app.schemas.prompts import BoxPrompt, StoredObjectPrompt
 from app.services.errors import ModelRuntimeError
 from app.services.json_store import write_json
@@ -67,6 +69,8 @@ class D4smVideoMaskingModel:
         combined_dir.mkdir(parents=True, exist_ok=True)
         per_object_dir.mkdir(parents=True, exist_ok=True)
 
+        performance: list[OperationSpeedMetric] = []
+        tracker_started_at = perf_counter()
         with self._d4sm_working_directory():
             tracker = self._tracker_class(
                 model_size=self.settings.d4sm_model_size,
@@ -76,7 +80,16 @@ class D4smVideoMaskingModel:
         init_image = Image.open(frame_paths[0]).convert("RGB")
         init_regions = self._objects_to_init_regions(objects)
         tracker.initialize(init_image, init_regions)
+        performance.append(
+            build_speed_metric(
+                name="d4sm_initialize",
+                label="DAM4SAM initialize",
+                elapsed_seconds=perf_counter() - tracker_started_at,
+                frames_processed=1,
+            )
+        )
 
+        initial_mask_started_at = perf_counter()
         manifest_frames = [
             self._write_initial_frame_masks(
                 init_regions=init_regions,
@@ -86,6 +99,15 @@ class D4smVideoMaskingModel:
                 per_object_dir=per_object_dir,
             )
         ]
+        performance.append(
+            build_speed_metric(
+                name="initial_mask_write",
+                label="Initial mask write",
+                elapsed_seconds=perf_counter() - initial_mask_started_at,
+                frames_processed=1,
+            )
+        )
+        tracking_started_at = perf_counter()
         for frame_index, frame_path in enumerate(frame_paths[1:], start=1):
             image = Image.open(frame_path).convert("RGB")
             outputs = tracker.track(image)
@@ -98,8 +120,17 @@ class D4smVideoMaskingModel:
                 per_object_dir=per_object_dir,
             )
             manifest_frames.append(frame_artifacts)
+        performance.append(
+            build_speed_metric(
+                name="d4sm_tracking",
+                label="DAM4SAM tracking",
+                elapsed_seconds=perf_counter() - tracking_started_at,
+                frames_processed=max(len(frame_paths) - 1, 0),
+            )
+        )
 
         manifest_path = output_dir / "manifest.json"
+        manifest_started_at = perf_counter()
         write_json(
             manifest_path,
             {
@@ -112,10 +143,18 @@ class D4smVideoMaskingModel:
                 "frames": manifest_frames,
             },
         )
+        performance.append(
+            build_speed_metric(
+                name="mask_manifest_write",
+                label="Mask manifest write",
+                elapsed_seconds=perf_counter() - manifest_started_at,
+            )
+        )
         return VideoMaskingResult(
             frames_total=len(frame_paths),
             frames_done=len(frame_paths),
             manifest_path=manifest_path,
+            performance=performance,
         )
 
     def _objects_to_init_regions(self, objects: list[StoredObjectPrompt]) -> list[dict[str, Any]]:
