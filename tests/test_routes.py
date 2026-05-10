@@ -1,8 +1,9 @@
-import pytest
-from fastapi.testclient import TestClient
+import asyncio
 
-from app.api.deps import get_inpainting_job_service, get_masking_job_service
-from app.main import create_app
+import pytest
+from fastapi import HTTPException
+
+from app.api.v1 import routes
 from app.services.errors import SessionNotFoundError
 
 
@@ -16,26 +17,62 @@ class MissingSessionInpaintingJobService:
         raise SessionNotFoundError(f"Video session {session_id} was not found.")
 
 
-@pytest.fixture
-def client() -> TestClient:
-    app = create_app()
-    app.dependency_overrides[get_masking_job_service] = MissingSessionMaskingJobService
-    app.dependency_overrides[get_inpainting_job_service] = MissingSessionInpaintingJobService
-    return TestClient(app)
+def assert_raises_404(coro) -> None:
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(coro)
+    assert error.value.status_code == 404
+    assert error.value.detail == "Video session missing was not found."
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        "/api/v1/video-sessions/missing/masking-jobs/job-1",
-        "/api/v1/video-sessions/missing/masking-jobs/job-1/masks/manifest",
-        "/api/v1/video-sessions/missing/masking-jobs/job-1/masks/combined/0",
-        "/api/v1/video-sessions/missing/masking-jobs/job-1/processed-video",
-        "/api/v1/video-sessions/missing/masking-jobs/job-1/inpainting-job",
-    ],
-)
-def test_stale_job_polling_returns_404(client: TestClient, path: str) -> None:
-    response = client.get(path)
+def test_stale_masking_job_polling_returns_404() -> None:
+    assert_raises_404(
+        routes.get_masking_job(
+            session_id="missing",
+            job_id="job-1",
+            service=MissingSessionMaskingJobService(),
+        )
+    )
 
-    assert response.status_code == 404
-    assert response.json() == {"detail": "Video session missing was not found."}
+
+def test_stale_mask_manifest_polling_returns_404() -> None:
+    assert_raises_404(
+        routes.get_mask_manifest(
+            session_id="missing",
+            job_id="job-1",
+            artifact_service=None,  # type: ignore[arg-type]
+            job_service=MissingSessionMaskingJobService(),
+        )
+    )
+
+
+def test_stale_combined_mask_polling_returns_404() -> None:
+    assert_raises_404(
+        routes.get_combined_mask(
+            session_id="missing",
+            job_id="job-1",
+            frame_index=0,
+            artifact_service=None,  # type: ignore[arg-type]
+            job_service=MissingSessionMaskingJobService(),
+        )
+    )
+
+
+def test_stale_processed_video_polling_returns_404() -> None:
+    assert_raises_404(
+        routes.get_processed_video(
+            session_id="missing",
+            job_id="job-1",
+            artifact_service=None,  # type: ignore[arg-type]
+            job_service=MissingSessionMaskingJobService(),
+        )
+    )
+
+
+def test_stale_inpainting_job_polling_returns_404() -> None:
+    assert_raises_404(
+        routes.get_inpainting_job(
+            session_id="missing",
+            job_id="job-1",
+            service=MissingSessionInpaintingJobService(),
+        )
+    )

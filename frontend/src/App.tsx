@@ -209,6 +209,9 @@ export default function App() {
   const canvasHostRef = useRef<HTMLDivElement | null>(null);
 
   const firstFrameUrl = session ? apiUrl(session.first_frame.url) : null;
+  const sourceVideoUrl = session ? apiUrl(`/api/v1/video-sessions/${session.session_id}/source-video`) : null;
+  const processedVideoUrl =
+    inpaintingJob?.status === "succeeded" ? apiUrl(inpaintingJob.processed_video_url) : null;
   const previewUrl = session && previewObjectId ? apiUrl(`/api/v1/video-sessions/${session.session_id}/objects/${previewObjectId}/preview-mask`) : null;
   const trackedMaskUrl =
     session && job?.status === "succeeded"
@@ -714,6 +717,31 @@ export default function App() {
             </Stage>
           </div>
 
+          <div className="video-preview-strip">
+            <section className="video-preview">
+              <div>
+                <strong>Source video</strong>
+                <span>{session?.video.filename ?? "No upload"}</span>
+              </div>
+              {sourceVideoUrl ? (
+                <video key={sourceVideoUrl} controls preload="metadata" src={sourceVideoUrl} />
+              ) : (
+                <div className="video-placeholder">No video</div>
+              )}
+            </section>
+            <section className="video-preview">
+              <div>
+                <strong>Processed video</strong>
+                <span>{inpaintingJob?.status === "succeeded" ? "Ready" : "Not ready"}</span>
+              </div>
+              {processedVideoUrl ? (
+                <video key={processedVideoUrl} controls preload="metadata" src={processedVideoUrl} />
+              ) : (
+                <div className="video-placeholder">No output</div>
+              )}
+            </section>
+          </div>
+
           <footer className="result-strip">
             <div>
               <strong>Tracked mask</strong>
@@ -740,7 +768,7 @@ export default function App() {
               </button>
             ) : null}
             {inpaintingJob?.status === "succeeded" ? (
-              <a className="secondary-button" href={apiUrl(inpaintingJob.processed_video_url)} target="_blank" rel="noreferrer">
+              <a className="secondary-button" href={processedVideoUrl ?? "#"} target="_blank" rel="noreferrer">
                 Processed video
               </a>
             ) : null}

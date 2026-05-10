@@ -23,6 +23,8 @@ class VideoSessionService:
     def __init__(self, *, settings: Settings, frame_service: VideoFrameService) -> None:
         self.settings = settings
         self.frame_service = frame_service
+        self.project_root = Path.cwd().resolve()
+        self.session_storage_dir = self._absolute_path(settings.session_storage_dir)
 
     async def create_session(self, upload: UploadFile) -> VideoSessionResponse:
         logger.info(
@@ -143,11 +145,11 @@ class VideoSessionService:
 
     def get_first_frame_path(self, session_id: str) -> str:
         metadata = self.get_metadata(session_id)
-        return metadata["paths"]["first_frame"]
+        return str(self._stored_path(metadata["paths"]["first_frame"]))
 
     def get_video_path(self, session_id: str) -> str:
         metadata = self.get_metadata(session_id)
-        return metadata["paths"]["video"]
+        return str(self._stored_path(metadata["paths"]["video"]))
 
     def get_prompts_path(self, session_id: str) -> Path:
         return self._session_dir(session_id) / "prompts.json"
@@ -190,7 +192,7 @@ class VideoSessionService:
         return size_bytes
 
     def _session_dir(self, session_id: str) -> Path:
-        return self.settings.session_storage_dir / session_id
+        return self.session_storage_dir / session_id
 
     def _metadata_path(self, session_id: str) -> Path:
         return self._session_dir(session_id) / "metadata.json"
@@ -198,3 +200,14 @@ class VideoSessionService:
     def _safe_video_filename(self, filename: str | None) -> str:
         suffix = Path(filename or "video").suffix.lower() or ".mp4"
         return f"source{suffix}"
+
+    def _absolute_path(self, path: Path) -> Path:
+        if path.is_absolute():
+            return path
+        return self.project_root / path
+
+    def _stored_path(self, path: str) -> Path:
+        stored_path = Path(path)
+        if stored_path.is_absolute():
+            return stored_path
+        return self.project_root / stored_path

@@ -87,6 +87,26 @@ async def get_first_frame(
     )
 
 
+@router.get("/video-sessions/{session_id}/source-video")
+async def get_source_video(
+    session_id: str,
+    service: VideoSessionService = Depends(get_video_session_service),
+) -> FileResponse:
+    try:
+        metadata = service.get_metadata(session_id)
+        video_path = service.get_video_path(session_id)
+    except SessionNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    video = metadata.get("video", {})
+    return FileResponse(
+        Path(video_path),
+        media_type=video.get("content_type") or "video/mp4",
+        filename=video.get("filename") or f"{session_id}-source-video",
+        content_disposition_type="inline",
+    )
+
+
 @router.post(
     "/video-sessions/{session_id}/objects",
     response_model=SubmitObjectPromptsResponse,
