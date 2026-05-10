@@ -41,6 +41,47 @@ npm run dev
 Open `http://localhost:5173`, upload a video, draw boxes or point prompts for
 one or more objects, preview the first-frame mask, then start the masking job.
 
+On a fresh Ubuntu machine with no usable Node.js or npm installation, install
+Node 22 with `nvm` first:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && . "$NVM_DIR/bash_completion"
+
+nvm install 22
+nvm use 22
+node -v
+npm -v
+```
+
+If the installer reports `~/.bashrc: Permission denied`, fix the file ownership
+and append the loader manually:
+
+```bash
+sudo chown "$USER:$USER" ~/.bashrc
+chmod u+rw ~/.bashrc
+
+cat >> ~/.bashrc <<'EOF'
+
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && . "$NVM_DIR/bash_completion"
+EOF
+
+source ~/.bashrc
+```
+
+Then install and run the GUI:
+
+```bash
+cd frontend
+npm install
+npm run dev -- --host 0.0.0.0
+```
+
 Prepare the DAM4SAM/D4SM runtime on a CUDA machine:
 
 ```bash
