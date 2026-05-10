@@ -1,20 +1,60 @@
+from pathlib import Path
 from typing import Protocol
 
 from app.schemas.prompts import StoredObjectPrompt
+
+
+class VideoMaskingResult:
+    def __init__(
+        self,
+        *,
+        frames_total: int,
+        frames_done: int,
+        manifest_path: Path,
+    ) -> None:
+        self.frames_total = frames_total
+        self.frames_done = frames_done
+        self.manifest_path = manifest_path
+
+
+class VideoInpaintingResult:
+    def __init__(
+        self,
+        *,
+        frames_total: int,
+        frames_done: int,
+        video_path: Path,
+    ) -> None:
+        self.frames_total = frames_total
+        self.frames_done = frames_done
+        self.video_path = video_path
 
 
 class VideoMaskingModel(Protocol):
     def load(self) -> None:
         """Load model weights and runtime resources."""
 
-    def segment_first_frame(
+    def generate_masks(
         self,
         *,
         session_id: str,
-        first_frame_path: str,
+        frames_dir: Path,
+        output_dir: Path,
         objects: list[StoredObjectPrompt],
-    ) -> None:
-        """Segment prompted objects on the first frame."""
+    ) -> VideoMaskingResult:
+        """Generate object masks for every video frame."""
 
-    def propagate_video_masks(self, *, session_id: str, video_path: str) -> None:
-        """Propagate first-frame masks across the full video."""
+
+class VideoInpaintingModel(Protocol):
+    def load(self) -> None:
+        """Load model weights and runtime resources."""
+
+    def inpaint_video(
+        self,
+        *,
+        session_id: str,
+        frames_dir: Path,
+        masks_dir: Path,
+        output_video_path: Path,
+    ) -> VideoInpaintingResult:
+        """Inpaint masked video frames and write a processed video."""

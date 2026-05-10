@@ -1,25 +1,215 @@
+from pathlib import Path
+from contextlib import contextmanager
+import os
+import sys
+from typing import Any
+
+from PIL import Image
+
 from app.core.config import Settings
-from app.schemas.prompts import StoredObjectPrompt
+from app.models.base import VideoMaskingResult
+from app.schemas.prompts import BoxPrompt, StoredObjectPrompt
+from app.services.errors import ModelRuntimeError
+from app.services.json_store import write_json
 
 
-class Dam4SamVideoMaskingModel:
+class D4smVideoMaskingModel:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self._tracker_class: type[Any] | None = None
+        self._tracker: Any | None = None
         self._loaded = False
 
     def load(self) -> None:
         if self._loaded:
             return
-        raise NotImplementedError("DAM4SAM runtime loading is not implemented yet.")
+        if not self.settings.d4sm_repo_path.exists():
+            raise ModelRuntimeError(
+                f"D4SM repo path does not exist: {self.settings.d4sm_repo_path}. "
+                "Run `python3 scripts/setup_d4sm.py --model-size large` first."
+            )
+        if not self.settings.d4sm_checkpoint_dir.exists():
+            raise ModelRuntimeError(
+                f"D4SM checkpoint directory does not exist: {self.settings.d4sm_checkpoint_dir}. "
+                "Run `python3 scripts/setup_d4sm.py --model-size large` first."
+            )
 
-    def segment_first_frame(
+        repo_path = str(self.settings.d4sm_repo_path)
+        if repo_path not in sys.path:
+            sys.path.insert(0, repo_path)
+
+        try:
+            from tracking_wrapper_mot import DAM4SAMMOT
+        except Exception as exc:
+            raise ModelRuntimeError("Could not import D4SM tracking_wrapper_mot.DAM4SAMMOT.") from exc
+
+        self._tracker_class = DAM4SAMMOT
+        self._loaded = True
+
+    def generate_masks(
         self,
         *,
         session_id: str,
-        first_frame_path: str,
+        frames_dir: Path,
+        output_dir: Path,
         objects: list[StoredObjectPrompt],
-    ) -> None:
-        raise NotImplementedError("DAM4SAM first-frame segmentation is not implemented yet.")
+    ) -> VideoMaskingResult:
+        self.load()
+        frame_paths = sorted(frames_dir.glob("*.png"))
+        if not frame_paths:
+            raise ModelRuntimeError("No extracted frames were found for D4SM masking.")
+        if self._tracker_class is None:
+            raise ModelRuntimeError("D4SM tracker class is not loaded.")
 
-    def propagate_video_masks(self, *, session_id: str, video_path: str) -> None:
-        raise NotImplementedError("DAM4SAM video mask propagation is not implemented yet.")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        combined_dir = output_dir / "combined"
+        per_object_dir = output_dir / "objects"
+        combined_dir.mkdir(parents=True, exist_ok=True)
+        per_object_dir.mkdir(parents=True, exist_ok=True)
+
+        with self._d4sm_working_directory():
+            tracker = self._tracker_class(
+                model_size=self.settings.d4sm_model_size,
+                checkpoint_dir=str(self.settings.d4sm_checkpoint_dir),
+                offload_state_to_cpu=self.settings.d4sm_offload_state_to_cpu,
+            )
+        init_image = Image.open(frame_paths[0]).convert("RGB")
+        init_regions = self._objects_to_init_regions(objects)
+        tracker.initialize(init_image, init_regions)
+
+        manifest_frames = [
+            self._write_initial_frame_masks(
+                init_regions=init_regions,
+                objects=objects,
+                image_size=init_image.size,
+                combined_dir=combined_dir,
+                per_object_dir=per_object_dir,
+            )
+        ]
+        for frame_index, frame_path in enumerate(frame_paths[1:], start=1):
+            image = Image.open(frame_path).convert("RGB")
+            outputs = tracker.track(image)
+            masks = outputs["masks"]
+            frame_artifacts = self._write_frame_masks(
+                masks=masks,
+                objects=objects,
+                frame_index=frame_index,
+                combined_dir=combined_dir,
+                per_object_dir=per_object_dir,
+            )
+            manifest_frames.append(frame_artifacts)
+
+        manifest_path = output_dir / "manifest.json"
+        write_json(
+            manifest_path,
+            {
+                "session_id": session_id,
+                "model": "d4sm",
+                "model_size": self.settings.d4sm_model_size,
+                "frames_total": len(frame_paths),
+                "objects": [item.object_id for item in objects],
+                "processed_video": None,
+                "frames": manifest_frames,
+            },
+        )
+        return VideoMaskingResult(
+            frames_total=len(frame_paths),
+            frames_done=len(frame_paths),
+            manifest_path=manifest_path,
+        )
+
+    def _objects_to_init_regions(self, objects: list[StoredObjectPrompt]) -> list[dict[str, Any]]:
+        init_regions = []
+        for item in objects:
+            box_prompt = next((prompt for prompt in item.prompts if isinstance(prompt, BoxPrompt)), None)
+            if box_prompt is None:
+                raise ModelRuntimeError(
+                    "D4SM v1 integration requires at least one bounding box per object. "
+                    "Point-only initialization needs a SAM2 image-prompt mask prepass."
+                )
+            init_regions.append(
+                {
+                    "obj_id": item.object_id,
+                    "bbox": [
+                        box_prompt.x1,
+                        box_prompt.y1,
+                        box_prompt.x2 - box_prompt.x1,
+                        box_prompt.y2 - box_prompt.y1,
+                    ],
+                }
+            )
+        return init_regions
+
+    def _write_initial_frame_masks(
+        self,
+        *,
+        init_regions: list[dict[str, Any]],
+        objects: list[StoredObjectPrompt],
+        image_size: tuple[int, int],
+        combined_dir: Path,
+        per_object_dir: Path,
+    ) -> dict[str, Any]:
+        import numpy as np
+
+        width, height = image_size
+        masks = []
+        for region in init_regions:
+            mask = np.zeros((height, width), dtype="uint8")
+            x, y, box_width, box_height = region["bbox"]
+            mask[y : y + box_height, x : x + box_width] = 1
+            masks.append(mask)
+        return self._write_frame_masks(
+            masks=masks,
+            objects=objects,
+            frame_index=0,
+            combined_dir=combined_dir,
+            per_object_dir=per_object_dir,
+        )
+
+    def _write_frame_masks(
+        self,
+        *,
+        masks: list[Any],
+        objects: list[StoredObjectPrompt],
+        frame_index: int,
+        combined_dir: Path,
+        per_object_dir: Path,
+    ) -> dict[str, Any]:
+        import numpy as np
+
+        frame_name = f"{frame_index:06d}.png"
+        combined_mask = None
+        object_paths = {}
+        for object_number, (object_prompt, mask) in enumerate(zip(objects, masks, strict=False), start=1):
+            mask_array = (np.asarray(mask) > 0).astype("uint8")
+            if combined_mask is None:
+                combined_mask = np.zeros(mask_array.shape, dtype="uint8")
+            combined_mask[mask_array > 0] = object_number
+            object_dir = per_object_dir / object_prompt.object_id
+            object_dir.mkdir(parents=True, exist_ok=True)
+            object_path = object_dir / frame_name
+            Image.fromarray(mask_array * 255).save(object_path)
+            object_paths[object_prompt.object_id] = str(object_path)
+
+        if combined_mask is None:
+            raise ModelRuntimeError("D4SM returned no masks for the current frame.")
+
+        combined_path = combined_dir / frame_name
+        Image.fromarray(combined_mask).save(combined_path)
+        return {
+            "frame_index": frame_index,
+            "combined_mask": str(combined_path),
+            "object_masks": object_paths,
+        }
+
+    @contextmanager
+    def _d4sm_working_directory(self):
+        previous_cwd = Path.cwd()
+        os.chdir(self.settings.d4sm_repo_path)
+        try:
+            yield
+        finally:
+            os.chdir(previous_cwd)
+
+
+Dam4SamVideoMaskingModel = D4smVideoMaskingModel

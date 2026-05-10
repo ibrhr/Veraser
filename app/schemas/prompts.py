@@ -45,4 +45,15 @@ class StoredObjectPrompt(ObjectPrompt):
 class SubmitObjectPromptsResponse(BaseModel):
     session_id: str
     objects: list[StoredObjectPrompt]
-    model_status: Literal["pending_model_integration"] = "pending_model_integration"
+    model_status: Literal["ready_for_masking"] = "ready_for_masking"
+
+
+class ObjectPromptListResponse(BaseModel):
+    session_id: str
+    objects: list[StoredObjectPrompt]
+
+
+class ObjectPromptResponse(BaseModel):
+    session_id: str
+    object: StoredObjectPrompt
+    preview_mask_url: str

@@ -100,6 +100,10 @@ class VideoSessionService:
     def get_prompts_path(self, session_id: str) -> Path:
         return self._session_dir(session_id) / "prompts.json"
 
+    def get_session_dir(self, session_id: str) -> Path:
+        self.get_metadata(session_id)
+        return self._session_dir(session_id)
+
     def delete_session(self, session_id: str) -> None:
         if not self._metadata_path(session_id).exists():
             raise SessionNotFoundError(f"Video session {session_id} was not found.")
