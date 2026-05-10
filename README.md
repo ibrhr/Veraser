@@ -82,6 +82,10 @@ npm install
 npm run dev -- --host 0.0.0.0
 ```
 
+When running through Thunder Compute's forwarded URL, Vite also requires the
+forwarded hostname to be listed in `frontend/vite.config.ts` under
+`server.allowedHosts`.
+
 Prepare the DAM4SAM/D4SM runtime on a CUDA machine:
 
 ```bash
@@ -273,6 +277,9 @@ Development commands
 ```bash
 # API server
 uv run uvicorn app.main:app --reload
+
+# API server with verbose per-frame service and model progress logs
+VERASER_LOG_LEVEL=DEBUG uv run uvicorn app.main:app --reload
 
 # Backend tests
 uv run pytest

@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 import importlib
+import logging
 import os
 import sys
 from time import perf_counter
@@ -14,6 +15,9 @@ from app.core.config import Settings
 from app.models.base import VideoInpaintingResult
 from app.schemas.performance import OperationSpeedMetric, build_speed_metric
 from app.services.errors import ModelRuntimeError
+
+
+logger = logging.getLogger(__name__)
 
 
 class SttnVideoInpaintingModel:
@@ -28,7 +32,14 @@ class SttnVideoInpaintingModel:
 
     def load(self) -> None:
         if self._loaded:
+            logger.debug("STTN model already loaded")
             return
+        logger.info(
+            "Loading STTN model repo_path=%s checkpoint_path=%s device=%s",
+            self.settings.sttn_repo_path,
+            self.settings.sttn_checkpoint_path,
+            self.settings.sttn_device,
+        )
         if not self.settings.sttn_repo_path.exists():
             raise ModelRuntimeError(
                 f"STTN repo path does not exist: {self.settings.sttn_repo_path}. "
@@ -55,8 +66,10 @@ class SttnVideoInpaintingModel:
 
         with self._sttn_working_directory():
             try:
+                logger.info("Importing STTN model module")
                 module = importlib.import_module("model.sttn")
                 model = module.InpaintGenerator().to(self.settings.sttn_device)
+                logger.info("Loading STTN checkpoint checkpoint_path=%s", self.settings.sttn_checkpoint_path)
                 data = torch.load(self.settings.sttn_checkpoint_path, map_location=self.settings.sttn_device)
                 model.load_state_dict(data["netG"])
                 model.eval()
@@ -69,6 +82,7 @@ class SttnVideoInpaintingModel:
         self._to_torch_format_tensor_class = ToTorchFormatTensor
         self._model = model
         self._loaded = True
+        logger.info("STTN model loaded")
 
     def inpaint_video(
         self,
@@ -89,9 +103,19 @@ class SttnVideoInpaintingModel:
             )
         if self._model is None or self._torch is None:
             raise ModelRuntimeError("STTN model is not loaded.")
+        logger.info(
+            "Starting STTN inpainting session_id=%s frames_dir=%s masks_dir=%s output_video_path=%s frame_count=%s mask_count=%s",
+            session_id,
+            frames_dir,
+            masks_dir,
+            output_video_path,
+            len(frame_paths),
+            len(mask_paths),
+        )
 
         performance: list[OperationSpeedMetric] = []
         read_frames_started_at = perf_counter()
+        logger.info("Reading STTN frames session_id=%s frame_count=%s", session_id, len(frame_paths))
         frames, original_size = self._read_frames(frame_paths)
         performance.append(
             build_speed_metric(
@@ -102,6 +126,7 @@ class SttnVideoInpaintingModel:
             )
         )
         read_masks_started_at = perf_counter()
+        logger.info("Reading STTN masks session_id=%s mask_count=%s", session_id, len(mask_paths))
         masks, binary_masks = self._read_masks(mask_paths)
         performance.append(
             build_speed_metric(
@@ -113,6 +138,7 @@ class SttnVideoInpaintingModel:
         )
         output_video_path.parent.mkdir(parents=True, exist_ok=True)
         inference_started_at = perf_counter()
+        logger.info("Running STTN inference session_id=%s frame_count=%s", session_id, len(frame_paths))
         comp_frames = self._run_sttn(frames=frames, masks=masks, binary_masks=binary_masks)
         performance.append(
             build_speed_metric(
@@ -123,6 +149,7 @@ class SttnVideoInpaintingModel:
             )
         )
         write_started_at = perf_counter()
+        logger.info("Writing STTN output video session_id=%s output_video_path=%s", session_id, output_video_path)
         self._write_video(comp_frames, output_video_path, original_size)
         performance.append(
             build_speed_metric(
@@ -145,7 +172,10 @@ class SttnVideoInpaintingModel:
         first = Image.open(frame_paths[0]).convert("RGB")
         original_size = first.size
         frames = [first.resize((width, height))]
-        frames.extend(Image.open(path).convert("RGB").resize((width, height)) for path in frame_paths[1:])
+        logger.debug("Read STTN frame index=0 path=%s original_size=%s resized_size=%sx%s", frame_paths[0], original_size, width, height)
+        for frame_index, path in enumerate(frame_paths[1:], start=1):
+            frames.append(Image.open(path).convert("RGB").resize((width, height)))
+            logger.debug("Read STTN frame index=%s path=%s resized_size=%sx%s", frame_index, path, width, height)
         return frames, original_size
 
     def _read_masks(self, mask_paths: list[Path]) -> tuple[list[Any], list[Any]]:
@@ -157,13 +187,14 @@ class SttnVideoInpaintingModel:
         masks = []
         binary_masks = []
         kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
-        for mask_path in mask_paths:
+        for mask_index, mask_path in enumerate(mask_paths):
             mask = Image.open(mask_path).convert("L").resize((width, height), Image.NEAREST)
             mask_array = (np.array(mask) > 0).astype("uint8")
             if self.settings.sttn_mask_dilation_iterations > 0:
                 mask_array = cv2.dilate(mask_array, kernel, iterations=self.settings.sttn_mask_dilation_iterations)
             binary_masks.append(np.expand_dims(mask_array, 2))
             masks.append(Image.fromarray(mask_array * 255))
+            logger.debug("Read STTN mask index=%s path=%s resized_size=%sx%s", mask_index, mask_path, width, height)
         return masks, binary_masks
 
     def _run_sttn(self, *, frames: list[Any], masks: list[Any], binary_masks: list[Any]) -> list[Any]:
@@ -201,6 +232,12 @@ class SttnVideoInpaintingModel:
                     )
                 )
                 ref_ids = self._get_ref_index(neighbor_ids, video_length)
+                logger.debug(
+                    "Running STTN window frame_index=%s neighbor_ids=%s ref_ids=%s",
+                    frame_index,
+                    neighbor_ids,
+                    ref_ids,
+                )
                 pred_feat = self._model.infer(
                     encoded_feats[0, neighbor_ids + ref_ids, :, :, :],
                     mask_tensors[0, neighbor_ids + ref_ids, :, :, :],
@@ -216,7 +253,9 @@ class SttnVideoInpaintingModel:
                         comp_frames[source_frame_index] = img
                     else:
                         comp_frames[source_frame_index] = comp_frames[source_frame_index].astype("float32") * 0.5 + img.astype("float32") * 0.5
+                    logger.debug("Composited STTN frame source_frame_index=%s", source_frame_index)
 
+        logger.info("STTN inference windows complete frame_count=%s", video_length)
         return [
             np.array(comp_frames[index]).astype("uint8") * binary_masks[index] + frame_arrays[index] * (1 - binary_masks[index])
             for index in range(video_length)
@@ -243,13 +282,15 @@ class SttnVideoInpaintingModel:
             output_size,
         )
         try:
-            for frame in frames:
+            for frame_index, frame in enumerate(frames):
                 frame_array = np.array(frame).astype("uint8")
                 if output_size != (self.settings.sttn_width, self.settings.sttn_height):
                     frame_array = cv2.resize(frame_array, output_size, interpolation=cv2.INTER_LINEAR)
                 writer.write(cv2.cvtColor(frame_array, cv2.COLOR_RGB2BGR))
+                logger.debug("Wrote STTN video frame index=%s output_video_path=%s", frame_index, output_video_path)
         finally:
             writer.release()
+            logger.info("Released STTN video writer output_video_path=%s output_size=%s", output_video_path, output_size)
 
     @contextmanager
     def _sttn_working_directory(self):

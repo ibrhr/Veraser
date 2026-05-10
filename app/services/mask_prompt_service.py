@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from uuid import uuid4
 
@@ -19,6 +20,9 @@ from app.services.mask_artifact_service import MaskArtifactService
 from app.services.session_service import VideoSessionService
 
 
+logger = logging.getLogger(__name__)
+
+
 class MaskPromptService:
     def __init__(
         self,
@@ -38,6 +42,13 @@ class MaskPromptService:
         metadata = self.session_service.get_metadata(session_id)
         width = metadata["first_frame"]["width"]
         height = metadata["first_frame"]["height"]
+        logger.info(
+            "Submitting object prompts session_id=%s object_count=%s frame_width=%s frame_height=%s",
+            session_id,
+            len(request.objects),
+            width,
+            height,
+        )
         self._validate_prompt_bounds(request, width=width, height=height)
 
         objects = [
@@ -56,6 +67,12 @@ class MaskPromptService:
         ]
         stored_objects.extend(objects)
         self._write_objects(prompt_path, stored_objects)
+        logger.info(
+            "Stored object prompts session_id=%s new_object_count=%s total_object_count=%s",
+            session_id,
+            len(objects),
+            len(stored_objects),
+        )
         for stored_object in objects:
             self._write_preview_mask(session_id=session_id, object_prompt=stored_object)
 
@@ -73,6 +90,12 @@ class MaskPromptService:
         request: ObjectPrompt,
     ) -> ObjectPromptResponse:
         metadata = self.session_service.get_metadata(session_id)
+        logger.info(
+            "Updating object prompt session_id=%s object_id=%s prompt_count=%s",
+            session_id,
+            object_id,
+            len(request.prompts),
+        )
         self._validate_prompt_bounds(
             SubmitObjectPromptsRequest(objects=[request]),
             width=metadata["first_frame"]["width"],
@@ -89,6 +112,7 @@ class MaskPromptService:
                 objects[index] = updated
                 self._write_objects(self.session_service.get_prompts_path(session_id), objects)
                 preview_path = self._write_preview_mask(session_id=session_id, object_prompt=updated)
+                logger.info("Updated object prompt session_id=%s object_id=%s preview_path=%s", session_id, object_id, preview_path)
                 return ObjectPromptResponse(
                     session_id=session_id,
                     object=updated,
@@ -98,11 +122,18 @@ class MaskPromptService:
 
     def delete_object(self, *, session_id: str, object_id: str) -> None:
         self.session_service.get_metadata(session_id)
+        logger.info("Deleting object prompt session_id=%s object_id=%s", session_id, object_id)
         objects = self._read_objects(session_id)
         remaining_objects = [item for item in objects if item.object_id != object_id]
         if len(remaining_objects) == len(objects):
             raise ObjectPromptNotFoundError(f"Object prompt {object_id} was not found.")
         self._write_objects(self.session_service.get_prompts_path(session_id), remaining_objects)
+        logger.info(
+            "Deleted object prompt session_id=%s object_id=%s remaining_object_count=%s",
+            session_id,
+            object_id,
+            len(remaining_objects),
+        )
 
     def get_preview_mask_path(self, *, session_id: str, object_id: str) -> Path:
         objects = self._read_objects(session_id)
@@ -111,6 +142,7 @@ class MaskPromptService:
             raise ObjectPromptNotFoundError(f"Object prompt {object_id} was not found.")
         preview_path = self.artifact_service.object_preview_mask_path(session_id, object_id)
         if not preview_path.exists():
+            logger.info("Preview mask missing; regenerating session_id=%s object_id=%s", session_id, object_id)
             self._write_preview_mask(session_id=session_id, object_prompt=object_prompt)
         return preview_path
 
@@ -149,10 +181,24 @@ class MaskPromptService:
         height = metadata["first_frame"]["height"]
         preview_path = self.artifact_service.object_preview_mask_path(session_id, object_prompt.object_id)
         preview_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.info(
+            "Writing preview mask session_id=%s object_id=%s prompt_count=%s path=%s",
+            session_id,
+            object_prompt.object_id,
+            len(object_prompt.prompts),
+            preview_path,
+        )
 
         image = Image.new("L", (width, height), 0)
         draw = ImageDraw.Draw(image)
-        for prompt in object_prompt.prompts:
+        for prompt_index, prompt in enumerate(object_prompt.prompts):
+            logger.debug(
+                "Drawing preview prompt session_id=%s object_id=%s prompt_index=%s prompt_type=%s",
+                session_id,
+                object_prompt.object_id,
+                prompt_index,
+                prompt.type,
+            )
             if isinstance(prompt, BoxPrompt):
                 draw.rectangle((prompt.x1, prompt.y1, prompt.x2, prompt.y2), fill=255)
             if isinstance(prompt, PointPrompt) and prompt.label == "foreground":

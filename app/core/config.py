@@ -7,6 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "Veraser"
     api_version: str = "v1"
+    log_level: str = "INFO"
     session_storage_dir: Path = Path("var/video-sessions")
     max_upload_bytes: int = 1_073_741_824
     accepted_video_extensions: set[str] = Field(

@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+import logging
 from pathlib import Path
 import shutil
 from time import perf_counter
@@ -15,33 +16,64 @@ from app.services.frame_service import VideoFrameService
 from app.services.json_store import read_json, write_json
 
 
+logger = logging.getLogger(__name__)
+
+
 class VideoSessionService:
     def __init__(self, *, settings: Settings, frame_service: VideoFrameService) -> None:
         self.settings = settings
         self.frame_service = frame_service
 
     async def create_session(self, upload: UploadFile) -> VideoSessionResponse:
+        logger.info(
+            "Creating video session filename=%s content_type=%s",
+            upload.filename,
+            upload.content_type,
+        )
         self._validate_upload(upload)
 
         session_id = str(uuid4())
         session_dir = self._session_dir(session_id)
         session_dir.mkdir(parents=True, exist_ok=False)
+        logger.info("Created session directory session_id=%s path=%s", session_id, session_dir)
 
         video_path = session_dir / self._safe_video_filename(upload.filename)
         upload_started_at = perf_counter()
         size_bytes = await self._write_upload(upload=upload, path=video_path)
         upload_elapsed = perf_counter() - upload_started_at
+        logger.info(
+            "Stored uploaded video session_id=%s path=%s size_bytes=%s elapsed_seconds=%.4f",
+            session_id,
+            video_path,
+            size_bytes,
+            upload_elapsed,
+        )
         if size_bytes > self.settings.max_upload_bytes:
+            logger.warning(
+                "Rejecting oversized upload session_id=%s size_bytes=%s max_upload_bytes=%s",
+                session_id,
+                size_bytes,
+                self.settings.max_upload_bytes,
+            )
             shutil.rmtree(session_dir, ignore_errors=True)
             raise UploadRejectedError("Uploaded video exceeds the configured size limit.")
 
         first_frame_path = session_dir / f"first_frame.{self.settings.first_frame_format}"
+        logger.info("Extracting first frame session_id=%s video_path=%s", session_id, video_path)
         first_frame_started_at = perf_counter()
         width, height = self.frame_service.extract_first_frame(
             video_path=video_path,
             output_path=first_frame_path,
         )
         first_frame_elapsed = perf_counter() - first_frame_started_at
+        logger.info(
+            "Extracted first frame session_id=%s path=%s width=%s height=%s elapsed_seconds=%.4f",
+            session_id,
+            first_frame_path,
+            width,
+            height,
+            first_frame_elapsed,
+        )
 
         created_at = datetime.now(UTC)
         response = VideoSessionResponse(
@@ -85,6 +117,7 @@ class VideoSessionService:
             },
         )
         write_json(self.get_prompts_path(session_id), [])
+        logger.info("Video session ready session_id=%s", session_id)
         return response
 
     def get_session_detail(self, session_id: str) -> VideoSessionDetail:
@@ -126,6 +159,7 @@ class VideoSessionService:
     def delete_session(self, session_id: str) -> None:
         if not self._metadata_path(session_id).exists():
             raise SessionNotFoundError(f"Video session {session_id} was not found.")
+        logger.info("Deleting video session session_id=%s path=%s", session_id, self._session_dir(session_id))
         shutil.rmtree(self._session_dir(session_id), ignore_errors=True)
 
     def _validate_upload(self, upload: UploadFile) -> None:
@@ -137,9 +171,18 @@ class VideoSessionService:
 
     async def _write_upload(self, *, upload: UploadFile, path: Path) -> int:
         size_bytes = 0
+        chunk_count = 0
         with path.open("wb") as file:
             while chunk := await upload.read(1024 * 1024):
+                chunk_count += 1
                 size_bytes += len(chunk)
+                logger.debug(
+                    "Read upload chunk path=%s chunk=%s chunk_bytes=%s total_bytes=%s",
+                    path,
+                    chunk_count,
+                    len(chunk),
+                    size_bytes,
+                )
                 if size_bytes > self.settings.max_upload_bytes:
                     break
                 file.write(chunk)

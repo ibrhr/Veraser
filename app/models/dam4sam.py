@@ -1,5 +1,6 @@
 from pathlib import Path
 from contextlib import contextmanager
+import logging
 import os
 import sys
 from time import perf_counter
@@ -15,6 +16,9 @@ from app.services.errors import ModelRuntimeError
 from app.services.json_store import write_json
 
 
+logger = logging.getLogger(__name__)
+
+
 class D4smVideoMaskingModel:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -24,7 +28,14 @@ class D4smVideoMaskingModel:
 
     def load(self) -> None:
         if self._loaded:
+            logger.debug("D4SM model already loaded")
             return
+        logger.info(
+            "Loading D4SM model repo_path=%s checkpoint_dir=%s model_size=%s",
+            self.settings.d4sm_repo_path,
+            self.settings.d4sm_checkpoint_dir,
+            self.settings.d4sm_model_size,
+        )
         if not self.settings.d4sm_repo_path.exists():
             raise ModelRuntimeError(
                 f"D4SM repo path does not exist: {self.settings.d4sm_repo_path}. "
@@ -47,6 +58,7 @@ class D4smVideoMaskingModel:
 
         self._tracker_class = DAM4SAMMOT
         self._loaded = True
+        logger.info("D4SM model loaded")
 
     def generate_masks(
         self,
@@ -62,6 +74,14 @@ class D4smVideoMaskingModel:
             raise ModelRuntimeError("No extracted frames were found for D4SM masking.")
         if self._tracker_class is None:
             raise ModelRuntimeError("D4SM tracker class is not loaded.")
+        logger.info(
+            "Starting D4SM mask generation session_id=%s frames_dir=%s output_dir=%s frame_count=%s object_count=%s",
+            session_id,
+            frames_dir,
+            output_dir,
+            len(frame_paths),
+            len(objects),
+        )
 
         output_dir.mkdir(parents=True, exist_ok=True)
         combined_dir = output_dir / "combined"
@@ -71,6 +91,7 @@ class D4smVideoMaskingModel:
 
         performance: list[OperationSpeedMetric] = []
         tracker_started_at = perf_counter()
+        logger.info("Initializing D4SM tracker session_id=%s", session_id)
         with self._d4sm_working_directory():
             tracker = self._tracker_class(
                 model_size=self.settings.d4sm_model_size,
@@ -79,6 +100,7 @@ class D4smVideoMaskingModel:
             )
         init_image = Image.open(frame_paths[0]).convert("RGB")
         init_regions = self._objects_to_init_regions(objects)
+        logger.info("Initializing D4SM objects session_id=%s init_region_count=%s", session_id, len(init_regions))
         tracker.initialize(init_image, init_regions)
         performance.append(
             build_speed_metric(
@@ -90,6 +112,7 @@ class D4smVideoMaskingModel:
         )
 
         initial_mask_started_at = perf_counter()
+        logger.info("Writing initial D4SM masks session_id=%s frame_index=0", session_id)
         manifest_frames = [
             self._write_initial_frame_masks(
                 init_regions=init_regions,
@@ -109,6 +132,12 @@ class D4smVideoMaskingModel:
         )
         tracking_started_at = perf_counter()
         for frame_index, frame_path in enumerate(frame_paths[1:], start=1):
+            logger.debug(
+                "Tracking D4SM frame session_id=%s frame_index=%s frame_path=%s",
+                session_id,
+                frame_index,
+                frame_path,
+            )
             image = Image.open(frame_path).convert("RGB")
             outputs = tracker.track(image)
             masks = outputs["masks"]
@@ -120,6 +149,12 @@ class D4smVideoMaskingModel:
                 per_object_dir=per_object_dir,
             )
             manifest_frames.append(frame_artifacts)
+            logger.debug("Wrote D4SM frame masks session_id=%s frame_index=%s", session_id, frame_index)
+        logger.info(
+            "D4SM tracking complete session_id=%s tracked_frames=%s",
+            session_id,
+            max(len(frame_paths) - 1, 0),
+        )
         performance.append(
             build_speed_metric(
                 name="d4sm_tracking",
@@ -131,6 +166,7 @@ class D4smVideoMaskingModel:
 
         manifest_path = output_dir / "manifest.json"
         manifest_started_at = perf_counter()
+        logger.info("Writing D4SM mask manifest session_id=%s manifest_path=%s", session_id, manifest_path)
         write_json(
             manifest_path,
             {
@@ -160,6 +196,7 @@ class D4smVideoMaskingModel:
     def _objects_to_init_regions(self, objects: list[StoredObjectPrompt]) -> list[dict[str, Any]]:
         init_regions = []
         for item in objects:
+            logger.debug("Preparing D4SM init region object_id=%s prompt_count=%s", item.object_id, len(item.prompts))
             box_prompt = next((prompt for prompt in item.prompts if isinstance(prompt, BoxPrompt)), None)
             if box_prompt is None:
                 raise ModelRuntimeError(
@@ -220,6 +257,12 @@ class D4smVideoMaskingModel:
         combined_mask = None
         object_paths = {}
         for object_number, (object_prompt, mask) in enumerate(zip(objects, masks, strict=False), start=1):
+            logger.debug(
+                "Writing object mask frame_index=%s object_id=%s object_number=%s",
+                frame_index,
+                object_prompt.object_id,
+                object_number,
+            )
             mask_array = (np.asarray(mask) > 0).astype("uint8")
             if combined_mask is None:
                 combined_mask = np.zeros(mask_array.shape, dtype="uint8")
